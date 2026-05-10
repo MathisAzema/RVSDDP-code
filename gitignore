@@ -1,0 +1,51 @@
+# --- LaTeX temporary files ---
+*.aux
+*.bbl
+*.blg
+*.brf
+*.fls
+*.fdb_latexmk
+*.glo
+*.idx
+*.ilg
+*.ind
+*.lof
+*.log
+*.lot
+*.nav
+*.out
+*.snm
+*.synctex.gz
+*.toc
+*.vrb
+*.xdv
+*.run.xml
+*.bcf
+*.acn
+*.acr
+*.alg
+*.glg
+*.gls
+*.ist
+
+# --- TeX-specific temp folders (if used) ---
+_output/
+_build/
+build/
+latex.out/
+
+# --- VS Code specific files ---
+.vscode/
+
+# --- OS-specific files ---
+.DS_Store
+Thumbs.db
+
+# --- TeXstudio ---
+*.backup
+*.bak
+*.~*
+
+# --- PDF output (optional) ---
+*.pdf
+*.csv
