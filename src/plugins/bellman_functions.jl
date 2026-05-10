@@ -589,7 +589,8 @@ function no_shift(
     items_traj::Vector{BackwardPassItems{T, Noise}},
     outgoing_states::Vector{Dict{Symbol, Float64}},
 ) where {T}
-    return (0.0, length(node.value_function.cut_V)+1)
+    node_next = model[(node.index)%length(model.nodes)+1]
+    return (0.0, length(node_next.value_function.cut_V)+1)
 end
 
 function shift_forward(
@@ -869,7 +870,8 @@ function shift_update_random_forward(
         shift = min(shift, shift_rand)
         update_shift(model, child_node, shift)
     end
-    return (shift, length(node.value_function.cut_V)+1)
+    node_next = model[(node.index)%length(model.nodes)+1]
+    return (shift, length(node_next.value_function.cut_V)+1)
 end
 
 function shift_random_forward_warmstart(
