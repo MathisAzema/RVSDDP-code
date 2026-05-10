@@ -28,6 +28,12 @@
 *.gls
 *.ist
 
+#---pdf 
+*.pdf
+
+#---bak
+*.bak
+
 # --- TeX-specific temp folders (if used) ---
 _output/
 _build/
