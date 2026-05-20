@@ -123,6 +123,7 @@ struct Options{T}
     shift_function::Function
     parallel::Int64
     start::Float64
+    refine_mode::Int64
     # Internal function: users should never construct this themselves.
     function Options(
         model::PolicyGraph{T},
@@ -148,6 +149,7 @@ struct Options{T}
         cut_selection::Bool = false,
         shift_function::Function = RVSDDP.no_shift,
         parallel::Int64 = 1,
+        refine_mode::Int64 = 0,
     ) where {T}
         return new{T}(
             initial_state,
@@ -178,6 +180,7 @@ struct Options{T}
             shift_function,
             parallel,
             time(),
+            refine_mode,
         )
     end
 end
@@ -681,57 +684,65 @@ function backward_pass(
     trajectory::Vector{Trajectory{T}},
 ) where {T}
     scenario_length = length(trajectory[1].scenario_path)
+    period= length(model.nodes)
+    index_to_refine = 0:period-1
+    if Int(round(scenario_length/period)) >= 2
+        index_rand = rand(2:Int(round(scenario_length/period)))
+        index_to_refine = unique(vcat(0:period-1, (index_rand-1)*period:index_rand*period-1))
+    end
     # TODO(odow): improve storage type.
     cuts = Dict{T,Vector{Any}}(index => Any[] for index in keys(model.nodes))
     for index in scenario_length:-1:1
-        node_index, _ = trajectory[1].scenario_path[index]
-        node =  model[node_index]
-        items_traj = [BackwardPassItems(T, Noise) for _ in trajectory]
-        outgoing_states = [traj.sampled_states[index] for traj in trajectory]
-        for (index_traj,traj) in enumerate(trajectory)
+        if index in index_to_refine || options.refine_mode == 0
+            node_index, _ = trajectory[1].scenario_path[index]
+            node =  model[node_index]
+            items_traj = [BackwardPassItems(T, Noise) for _ in trajectory]
+            outgoing_states = [traj.sampled_states[index] for traj in trajectory]
+            for (index_traj,traj) in enumerate(trajectory)
 
-            outgoing_state = outgoing_states[index_traj]
-            items = items_traj[index_traj]
-            if length(node.children) == 0
-                continue
+                outgoing_state = outgoing_states[index_traj]
+                items = items_traj[index_traj]
+                if length(node.children) == 0
+                    continue
+                end
+                solve_all_children(
+                    model,
+                    node,
+                    items,
+                    1.0,
+                    outgoing_state,
+                    options.backward_sampling_scheme,
+                    options.duality_handler,
+                    options,
+                )
             end
-            solve_all_children(
-                model,
-                node,
-                items,
-                1.0,
-                outgoing_state,
-                options.backward_sampling_scheme,
-                options.duality_handler,
-                options,
-            )
-        end
-        shift=options.shift_function(model, node, items_traj, outgoing_states)
-        if index <= length(model.nodes)
-            outgoing_state = outgoing_states[1]
-            items = items_traj[1]
-            _update_delta(model, node, outgoing_state, items.probability, items.objectives)
-        end
-        for (index_traj, traj) in enumerate(trajectory)
-            outgoing_state = outgoing_states[index_traj]
-            items = items_traj[index_traj]
-            new_cuts = refine_bellman_function(
-                model,
-                node,
-                node.bellman_function,
-                options.risk_measures[node_index],
-                outgoing_state,
-                items.duals,
-                items.supports,
-                items.probability,
-                items.objectives,
-                options.cut_selection,
-                shift,
-                length(options.log)+1,
-                time()-options.start,
-            )
+            shift=options.shift_function(model, node, items_traj, outgoing_states)
+            if index <= length(model.nodes)
+                outgoing_state = outgoing_states[1]
+                items = items_traj[1]
+                _update_delta(model, node, outgoing_state, items.probability, items.objectives)
+            end
+            for (index_traj, traj) in enumerate(trajectory)
+                outgoing_state = outgoing_states[index_traj]
+                items = items_traj[index_traj]
+                new_cuts = refine_bellman_function(
+                    model,
+                    node,
+                    node.bellman_function,
+                    options.risk_measures[node_index],
+                    outgoing_state,
+                    items.duals,
+                    items.supports,
+                    items.probability,
+                    items.objectives,
+                    options.cut_selection,
+                    shift,
+                    length(options.log)+1,
+                    time()-options.start,
+                )
 
-            push!(cuts[node_index], new_cuts)
+                push!(cuts[node_index], new_cuts)
+            end
         end
     end
     new_cuts_0 = _refine_at_initial_point(model, options)
@@ -1112,7 +1123,8 @@ function train(
     cut_selection::Bool=false,
     discount_factor::Float64=0.1,
     shift_function::Function=RVSDDP.no_shift,
-    parallel::Int64=1
+    parallel::Int64=1,
+    refine_mode::Int64=0,
 )
     #Mathis
     # if infinite
@@ -1264,7 +1276,8 @@ function train(
         infinite,
         cut_selection,
         shift_function,
-        parallel
+        parallel,
+        refine_mode,
     )
     status = :not_solved
     try
