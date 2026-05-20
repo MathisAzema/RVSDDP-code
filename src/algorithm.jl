@@ -616,9 +616,8 @@ mutable struct Trajectory{T}
 end
 
 function _update_delta(
-    model::PolicyGraph{T},
     node::Node{T}, 
-    outgoing_state::Dict{Symbol,Float64}, 
+    incoming_state::Dict{Symbol,Float64}, 
     risk_adjusted_probability::Vector{Float64}, 
     objective_realizations::Vector{Float64},
 ) where {T}
@@ -627,8 +626,7 @@ function _update_delta(
         p = risk_adjusted_probability[i]
         TVᵏ += p * objective_realizations[i]
     end
-    child_node=model[node.children[1].term]
-    Vᵏ=compute_V(child_node.value_function, outgoing_state)
+    Vᵏ=compute_V(node.value_function, incoming_state)
     deltaᵏ = TVᵏ - Vᵏ
     push!(node.delta, deltaᵏ)
 end
@@ -638,38 +636,79 @@ function _refine_at_initial_point(
     options::Options,
 
 ) where {T}
-    node_index = length(model.nodes)
-    node =  model[node_index]
-    items = BackwardPassItems(T, Noise)
-    outgoing_state = model.initial_root_state
+    if options.infinite
+        node_index = length(model.nodes)
+        node =  model[node_index]
+        items = BackwardPassItems(T, Noise)
+        outgoing_state = model.initial_root_state
 
-    solve_all_children(
-        model,
-        node,
-        items,
-        1.0,
-        outgoing_state,
-        options.backward_sampling_scheme,
-        options.duality_handler,
-        options,
-    )
-    shift=options.shift_function(model, node, [items], [outgoing_state])
+        solve_all_children(
+            model,
+            node,
+            items,
+            1.0,
+            outgoing_state,
+            options.backward_sampling_scheme,
+            options.duality_handler,
+            options,
+        )
+        shift=options.shift_function(model, node, [items], [outgoing_state])
 
-    new_cuts = refine_bellman_function(
-        model,
-        node,
-        node.bellman_function,
-        options.risk_measures[node_index],
-        outgoing_state,
-        items.duals,
-        items.supports,
-        items.probability,
-        items.objectives,
-        options.cut_selection,
-        shift,
-        length(options.log)+1,
-        time()-options.start,
-    )
+        new_cuts = refine_bellman_function(
+            model,
+            node,
+            node.bellman_function,
+            options.risk_measures[node_index],
+            outgoing_state,
+            items.duals,
+            items.supports,
+            items.probability,
+            items.objectives,
+            options.cut_selection,
+            shift,
+            length(options.log)+1,
+            time()-options.start,
+        )
+        
+        _update_delta(model[node.children[1].term], outgoing_state, items.probability, items.objectives)
+    else
+        node_index = 1
+        node =  model[node_index]
+        items = BackwardPassItems(T, Noise)
+        incoming_state = model.initial_root_state
+
+        solve_one_children(
+            model,
+            node,
+            items,
+            1.0,
+            incoming_state,
+            options.backward_sampling_scheme,
+            options.duality_handler,
+            options,
+        )
+        shift = 0.0
+
+        πᵏ = Dict(key => 0.0 for key in keys(incoming_state))
+        θᵏ = 0.0
+        objective_realizations = items.objectives
+        risk_adjusted_probability = items.probability
+        dual_variables = items.duals
+        for i in 1:length(objective_realizations)
+            p = risk_adjusted_probability[i]
+            θᵏ += p * objective_realizations[i]
+            for (key, dual) in dual_variables[i]
+                πᵏ[key] += p * dual
+            end
+        end
+
+        iteration = length(options.log)+1
+
+        cut = Cut(iteration, time() - options.start, θᵏ, πᵏ, nothing, nothing, 1, nothing, incoming_state)
+        # println(cut)
+        return []
+    end
+    # println(new_cuts)
 
     return new_cuts
 end
@@ -717,10 +756,10 @@ function backward_pass(
                 )
             end
             shift=options.shift_function(model, node, items_traj, outgoing_states)
-            if index <= length(model.nodes)
+            if index <= length(model.nodes)-1
                 outgoing_state = outgoing_states[1]
                 items = items_traj[1]
-                _update_delta(model, node, outgoing_state, items.probability, items.objectives)
+                _update_delta(model[node.children[1].term], outgoing_state, items.probability, items.objectives)
             end
             for (index_traj, traj) in enumerate(trajectory)
                 outgoing_state = outgoing_states[index_traj]
@@ -773,6 +812,70 @@ struct BackwardPassItems{T,U}
     end
 end
 
+function solve_one_children(
+    model::PolicyGraph{T},
+    node::Node{T},
+    items::BackwardPassItems,
+    belief::Float64,
+    incoming_state::Dict{Symbol,Float64},
+    backward_sampling_scheme::AbstractBackwardSamplingScheme,
+    duality_handler::Union{Nothing,AbstractDualityHandler},
+    options,
+) where {T}
+    lock(node.lock)
+    try
+        @_timeit_threadsafe model.timer_output "prepare_backward_pass" begin
+            restore_duality = prepare_backward_pass(
+                node,
+                options.duality_handler,
+                options,
+            )
+        end
+        for noise in sample_backward_noise_terms_with_state(
+            backward_sampling_scheme,
+            node,
+            incoming_state,
+        )
+            if haskey(items.cached_solutions, (node.index, noise.term))
+                sol_index = items.cached_solutions[(node.index, noise.term)]
+                push!(items.duals, items.duals[sol_index])
+                push!(items.supports, items.supports[sol_index])
+                push!(items.nodes, node.index)
+                push!(items.probability, items.probability[sol_index])
+                push!(items.objectives, items.objectives[sol_index])
+                push!(items.belief, belief)
+            else
+                @_timeit_threadsafe model.timer_output "solve_subproblem" begin
+                    subproblem_results = solve_subproblem(
+                        model,
+                        node,
+                        incoming_state,
+                        noise.term;
+                        duality_handler = duality_handler,
+                    )
+                end
+                push!(items.duals, subproblem_results.duals)
+                push!(items.supports, noise)
+                push!(items.nodes, node.index)
+                push!(
+                    items.probability,
+                    noise.probability,
+                )
+                push!(items.objectives, subproblem_results.objective)
+                push!(items.belief, belief)
+                items.cached_solutions[(node.index, noise.term)] =
+                    length(items.duals)
+            end
+        end
+        @_timeit_threadsafe model.timer_output "prepare_backward_pass" begin
+            restore_duality()
+        end
+    finally
+        unlock(node.lock)
+    end
+    return
+end
+
 function solve_all_children(
     model::PolicyGraph{T},
     node::Node{T},
@@ -793,57 +896,16 @@ function solve_all_children(
         #
         # See RVSDDP.jl#796 and RVSDDP.jl#797 for more discussion.
         child_node = model[child.term]
-        lock(child_node.lock)
-        try
-            @_timeit_threadsafe model.timer_output "prepare_backward_pass" begin
-                restore_duality = prepare_backward_pass(
-                    child_node,
-                    options.duality_handler,
-                    options,
-                )
-            end
-            for noise in sample_backward_noise_terms_with_state(
-                backward_sampling_scheme,
-                child_node,
-                outgoing_state,
-            )
-                if haskey(items.cached_solutions, (child.term, noise.term))
-                    sol_index = items.cached_solutions[(child.term, noise.term)]
-                    push!(items.duals, items.duals[sol_index])
-                    push!(items.supports, items.supports[sol_index])
-                    push!(items.nodes, child_node.index)
-                    push!(items.probability, items.probability[sol_index])
-                    push!(items.objectives, items.objectives[sol_index])
-                    push!(items.belief, belief)
-                else
-                    @_timeit_threadsafe model.timer_output "solve_subproblem" begin
-                        subproblem_results = solve_subproblem(
-                            model,
-                            child_node,
-                            outgoing_state,
-                            noise.term;
-                            duality_handler = duality_handler,
-                        )
-                    end
-                    push!(items.duals, subproblem_results.duals)
-                    push!(items.supports, noise)
-                    push!(items.nodes, child_node.index)
-                    push!(
-                        items.probability,
-                        child.probability * noise.probability,
-                    )
-                    push!(items.objectives, subproblem_results.objective)
-                    push!(items.belief, belief)
-                    items.cached_solutions[(child.term, noise.term)] =
-                        length(items.duals)
-                end
-            end
-            @_timeit_threadsafe model.timer_output "prepare_backward_pass" begin
-                restore_duality()
-            end
-        finally
-            unlock(child_node.lock)
-        end
+        solve_one_children(
+            model,
+            child_node,
+            items,
+            belief,
+            outgoing_state,
+            backward_sampling_scheme,
+            duality_handler,
+            options,
+        )
     end
     return
 end

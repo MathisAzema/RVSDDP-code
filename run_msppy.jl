@@ -4,7 +4,7 @@ Pkg.activate(".")
 
 using Distributed
 
-Nbworkers = 10
+Nbworkers = 15
 if nworkers() >= Nbworkers+1
     rmprocs(workers())
     addprocs(Nbworkers)

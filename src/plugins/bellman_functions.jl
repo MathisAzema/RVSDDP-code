@@ -593,6 +593,67 @@ function no_shift(
     return (0.0, length(node_next.value_function.cut_V)+1)
 end
 
+function update_shift(
+    model::PolicyGraph{T},
+    node::Node{T},
+    shift_k::Float64,
+) where {T}
+    iter = length(node.value_function.cut_V)+1
+    for cut in node.value_function.cut_V
+        if shift_k < cut.shift[end][1]
+            push!(cut.shift, (shift_k, iter))
+            set_normalized_rhs(cut.constraint_V, cut.intercept-shift_k)
+            set_normalized_rhs(cut.constraint_subproblem, cut.intercept-shift_k)
+        end
+    end
+end
+
+function shift_update_random_forward(
+    model::PolicyGraph{T},
+    node::Node{T},
+    items_traj::Vector{BackwardPassItems{T, Noise}},
+    outgoing_states::Vector{Dict{Symbol, Float64}},
+) where {T}
+    res_traj=[0.0 for i in 1:length(items_traj)]
+    shift=0.0
+    for child in node.children
+        child_node=model[child.term]
+        for (i, items) in enumerate(items_traj)
+            state = outgoing_states[i]
+            θᵏ=0.0
+            for j in 1:length(items.objectives)
+                p = items.probability[j]
+                θᵏ += p * items.objectives[j]
+            end
+            TVx=θᵏ
+            Vx=compute_V(child_node.value_function, state)
+            res_traj[i]=(TVx-Vx)
+        end
+        shift, k=findmin(res_traj)
+        sol=Dict{Symbol,Float64}()
+        two_stage=child_node.two_stage
+        for (i,x) in outgoing_states[1]
+            lb=two_stage.lower_bounds[i]
+            ub=two_stage.upper_bounds[i]
+            sol[i]=rand()*(ub-lb)+lb
+        end
+        Vrand=compute_V(child_node.value_function, sol)
+        TVrandapprox = compute_approx_TV(child_node.value_function, sol)
+        shift_rand=Inf
+        if TVrandapprox-Vrand<= shift-1e-4
+            TVjensenrand=compute_jensen_TV(child_node, sol)
+            if TVjensenrand-Vrand <= shift-1e-4
+                TVrand=compute_TV(child_node, sol)
+                shift_rand=TVrand-Vrand
+            end
+        end
+        shift = min(shift, shift_rand)
+        update_shift(model, child_node, shift)
+    end
+    node_next = model[(node.index)%length(model.nodes)+1]
+    return (shift, length(node_next.value_function.cut_V)+1)
+end
+
 function shift_forward(
     model::PolicyGraph{T},
     node::Node{T},
@@ -615,21 +676,6 @@ function shift_forward(
         end
     end
     return minimum(res_traj)
-end
-
-function update_shift(
-    model::PolicyGraph{T},
-    node::Node{T},
-    shift_k::Float64,
-) where {T}
-    iter = length(node.value_function.cut_V)+1
-    for cut in node.value_function.cut_V
-        if shift_k < cut.shift[end][1]
-            push!(cut.shift, (shift_k, iter))
-            set_normalized_rhs(cut.constraint_V, cut.intercept-shift_k)
-            set_normalized_rhs(cut.constraint_subproblem, cut.intercept-shift_k)
-        end
-    end
 end
 
 function shift_update_forward(
@@ -825,52 +871,6 @@ function shift_random_forward(
         shift = min(shift, shift_rand)
     end
     return shift
-end
-
-function shift_update_random_forward(
-    model::PolicyGraph{T},
-    node::Node{T},
-    items_traj::Vector{BackwardPassItems{T, Noise}},
-    outgoing_states::Vector{Dict{Symbol, Float64}},
-) where {T}
-    res_traj=[0.0 for i in 1:length(items_traj)]
-    shift=0.0
-    for child in node.children
-        child_node=model[child.term]
-        for (i, items) in enumerate(items_traj)
-            state = outgoing_states[i]
-            θᵏ=0.0
-            for j in 1:length(items.objectives)
-                p = items.probability[j]
-                θᵏ += p * items.objectives[j]
-            end
-            TVx=θᵏ
-            Vx=compute_V(child_node.value_function, state)
-            res_traj[i]=(TVx-Vx)
-        end
-        shift, k=findmin(res_traj)
-        sol=Dict{Symbol,Float64}()
-        two_stage=child_node.two_stage
-        for (i,x) in outgoing_states[1]
-            lb=two_stage.lower_bounds[i]
-            ub=two_stage.upper_bounds[i]
-            sol[i]=rand()*(ub-lb)+lb
-        end
-        Vrand=compute_V(child_node.value_function, sol)
-        TVrandapprox = compute_approx_TV(child_node.value_function, sol)
-        shift_rand=Inf
-        if TVrandapprox-Vrand<= shift-1e-4
-            TVjensenrand=compute_jensen_TV(child_node, sol)
-            if TVjensenrand-Vrand <= shift-1e-4
-                TVrand=compute_TV(child_node, sol)
-                shift_rand=TVrand-Vrand
-            end
-        end
-        shift = min(shift, shift_rand)
-        update_shift(model, child_node, shift)
-    end
-    node_next = model[(node.index)%length(model.nodes)+1]
-    return (shift, length(node_next.value_function.cut_V)+1)
 end
 
 function shift_random_forward_warmstart(
@@ -1478,10 +1478,6 @@ function compute_approx_value(
 ) where {T}
     horizon = length(model.nodes)
     res = compute_V(model[1].value_function, model.initial_root_state)
-    # for (i, node) in model.nodes
-    #     t = i%horizon
-    #     res+= node.delta[end]*node.discount_factor^t/(1-model.discount_factor^horizon)
-    # end
     return res
 end
 
@@ -1491,7 +1487,7 @@ function compute_hat_delta(
     time_step::Int64,
     iteration::Int64,
     discount_factor::Float64,
-) where {T}
+)
     node_index=(time_step-1)%horizon + 1
     res = 0.0
 
