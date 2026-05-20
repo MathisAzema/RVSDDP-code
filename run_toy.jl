@@ -147,7 +147,9 @@ function run_rvsddp(seed_list, parallel, iter_max_list, shift_function_list, dis
     return 
 end
 
-@everywhere function evaluate_job(folder, iter, N, discount_factor, TimeHorizon)
+@everywhere function evaluate_job(folder, iter, N, discount_factor)
+
+    TimeHorizon = Int(round(log(0.001)/log(discount_factor)))
 
     model = RVSDDP.PolicyGraph(
         subproblem_builder,
@@ -180,11 +182,11 @@ end
 
 end
 
-function run_evaluate(seed_list, iter_max_list, shift_function_list, discount_factor_list, iter_list, N_list, TimeHorizon)
-    combos = [("results_toy/$(shift_function)/$(discount_factor)/seed_$(seed)_iter_$(iter_max)", iter, N, discount_factor, TimeHorizon) for seed in seed_list for iter_max in iter_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for iter in iter_list for N in N_list]
+function run_evaluate(seed_list, iter_max_list, shift_function_list, discount_factor_list, iter_list, N_list)
+    combos = [("results_toy/$(shift_function)/$(discount_factor)/seed_$(seed)_iter_$(iter_max)", iter, N, discount_factor) for seed in seed_list for iter_max in iter_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for iter in iter_list for N in N_list]
 
-    results = pmap(combos) do (folder, iter, N, discount_factor, time_horizon)
-        evaluate_job(folder, iter, N, discount_factor, time_horizon)
+    results = pmap(combos) do (folder, iter, N, discount_factor)
+        evaluate_job(folder, iter, N, discount_factor)
     end
     return 
 end

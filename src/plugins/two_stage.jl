@@ -302,7 +302,7 @@ function compute_V(
     vf::Value_Function,
     incoming_state::Dict{Symbol,Float64}
 )
-    val = maximum([cut.intercept + sum(cut.coefficients[i] * x for (i,x) in incoming_state) for cut in vf.cut_V])
+    val = maximum([cut.intercept - cut.shift[end][1] + sum(cut.coefficients[i] * x for (i,x) in incoming_state) for cut in vf.cut_V])
     return val
 end
 
@@ -327,7 +327,7 @@ function compute_approx_TV(
     vf::Value_Function,
     incoming_state::Dict{Symbol,Float64}
 )
-    val = maximum([cut.intercept+ sum(cut.coefficients[i] * x for (i,x) in incoming_state) for cut in vf.cut_TV])
+    val = maximum([cut.intercept + sum(cut.coefficients[i] * x for (i,x) in incoming_state) for cut in vf.cut_TV])
     return val
 end
 

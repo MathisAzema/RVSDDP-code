@@ -166,7 +166,7 @@ function _update_value_function(
         cutV = Cut2(
             cut.iteration,
             cut.time,
-            cut.intercept-shift[1],
+            cut.intercept,
             cut.coefficients,
             [shift],
             cV,
@@ -625,10 +625,9 @@ function update_shift(
     iter = length(node.value_function.cut_V)+1
     for cut in node.value_function.cut_V
         if shift_k < cut.shift[end][1]
-            cut.intercept += cut.shift[end][1]-shift_k
             push!(cut.shift, (shift_k, iter))
-            set_normalized_rhs(cut.constraint_V, cut.intercept)
-            set_normalized_rhs(cut.constraint_subproblem, cut.intercept)
+            set_normalized_rhs(cut.constraint_V, cut.intercept-shift_k)
+            set_normalized_rhs(cut.constraint_subproblem, cut.intercept-shift_k)
         end
     end
 end

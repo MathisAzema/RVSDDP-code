@@ -545,7 +545,7 @@ function count_active_cuts(
     for (k,cutb) in enumerate(node.value_function.cut_V)
         interceptb = cutb.intercept
         coefficientb=cutb.coefficients 
-        active_cuts+=is_active(node, interceptb, coefficientb, tol)
+        active_cuts+=is_active(node, interceptb-cutb.shift[end][1], coefficientb, tol)
     end
     # println("Node $(node.index) has $(active_cuts) active cuts")
     return active_cuts
@@ -555,7 +555,10 @@ function count_all_active_cuts(
     model::PolicyGraph{T}, 
     tol::Float64
 )  where {T}
-    res = [count_active_cuts(node, tol) for (index,node) in model.nodes]
+    res = [0.0 for (index,node) in model.nodes]
+    for (index,node) in model.nodes
+        res[index] = count_active_cuts(node, tol)
+    end
     # println("Total number of active cuts: $(sum(res))")
     return res
 end
@@ -608,6 +611,7 @@ function reconstruct_cuts(df)
         cut = (
             iteration = row.iteration,
             time = row.time,
+            node = row.node,
             intercept = row.intercept,
             coefficients = JSON.parse(row.coefficients),
             shift = JSON.parse(row.shift),
@@ -620,38 +624,48 @@ end
 
 using DataFrames
 
-function add_cuts(model::PolicyGraph, iteration::Int64, folder::String)
+function _add_cuts(model::PolicyGraph, iteration::Int64, folder::String)
     if isfile("$(folder)/cuts.csv")
         df_cuts = CSV.read("$(folder)/cuts.csv", DataFrame)
 
         cuts = reconstruct_cuts(df_cuts)
 
         T=length(model.nodes)
+        limit = Dict()
         for node_index in keys(model.nodes)
             node=model[node_index]
             vf=node.value_function
             index=node.index == 1 ? T : node.index - 1
             V=model[index].bellman_function.global_theta
-            limit= 0
-            for cut in cuts[2:end]
-                if cut.iteration<=iteration
-                    limit+=1
+            lim= 0
+            for cut in cuts[1:end]
+                if cut.iteration<=iteration && cut.node == node_index
+                    lim+=1
                 end
             end
+            limit[node_index] = lim
+         end
 
-            shift_index = length(cuts[limit+1].shift)
-
-            for cut in cuts[2:end]
-                if cut.iteration<=iteration
-                    intercept = cut.intercept
-                    coefficient=Dict(Symbol(i) => val for (i, val) in cut.coefficients)
-                    state = Dict(Symbol(i) => val for (i, val) in cut.state)
-                    shift=cut.shift[end-shift_index+1]
-                    cV=@constraint(vf.model, vf.theta -sum(coefficient[i]*x for (i,x) in vf.states)>=intercept)
-                    @constraint(vf.model_TV, vf.theta_TV -sum(coefficient[i]*x for (i,x) in vf.states_TV)>=intercept + shift)
-                    cS=@constraint(model[index].subproblem, V.theta -sum(coefficient[i]*x for (i,x) in V.states)>=intercept)
-                    push!(vf.cut_V, Cut2(cut.iteration, cut.time, intercept, coefficient, [shift], cV, cS, state))
+        for cut in cuts
+            if 1<=cut.iteration<=iteration
+                node_index = cut.node
+                node=model[node_index]
+                vf=node.value_function
+                index=node.index == 1 ? T : node.index - 1
+                V=model[index].bellman_function.global_theta
+                intercept = cut.intercept
+                coefficient=Dict(Symbol(i) => val for (i, val) in cut.coefficients)
+                state = Dict(Symbol(i) => val for (i, val) in cut.state)
+                shift = 0.0
+                i = 1
+                while i<= length(cut.shift) && cut.shift[i][2]<=limit[node_index]
+                    i += 1
                 end
+                shift = [(s[1], s[2]) for s in cut.shift[1:i-1]]
+                cV=@constraint(vf.model, vf.theta -sum(coefficient[i]*x for (i,x) in vf.states)>=intercept - shift[end][1])
+                @constraint(vf.model_TV, vf.theta_TV -sum(coefficient[i]*x for (i,x) in vf.states_TV)>=intercept)
+                cS=@constraint(model[index].subproblem, V.theta -sum(coefficient[i]*x for (i,x) in V.states)>=intercept-shift[end][1])
+                push!(vf.cut_V, Cut2(cut.iteration, cut.time, intercept, coefficient, shift, cV, cS, state))
             end
         end
 
@@ -666,5 +680,5 @@ function add_cuts(model::PolicyGraph, iteration::Int64, folder::String)
         println("Fichier $folder non trouvé")
         return
     end
-    return cuts
+    return
 end
