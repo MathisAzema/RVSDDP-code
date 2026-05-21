@@ -132,7 +132,7 @@ end
 
 @everywhere using CSV, DataFrames, JSON
 
-@everywhere function rvsddp_job(seed, parallel, iter_max, shift_function, discount_factor, refine_mode)
+@everywhere function rvsddp_job(seed, parallel, cut_max, shift_function, discount_factor, refine_mode)
     model = RVSDDP.PolicyGraph(
         msppy_hydro_thermal_builder,
         graph;
@@ -144,7 +144,7 @@ end
 
     Random.seed!(seed)
     
-    RVSDDP.train(model; refine_mode=refine_mode, parallel=parallel, sampling_scheme=RVSDDP.InSampleMonteCarlo(max_depth=10000000, rollout_limit = i -> 12*i-1, parallel=parallel), iteration_limit = iter_max, infinite = true, shift_function=shift_function); 
+    RVSDDP.train(model; refine_mode=refine_mode, parallel=parallel, sampling_scheme=RVSDDP.InSampleMonteCarlo(max_depth=10000000, rollout_limit = i -> 12*i-1, parallel=parallel), cut_limit = cut_max, infinite = true, shift_function=shift_function); 
 
     cuts_data = []
     for (_, node) in model.nodes
@@ -174,7 +174,7 @@ end
         mkdir(folder2)
     end
 
-    folder3 = "$(folder1)/$(discount_factor)/seed_$(seed)_iter_$(iter_max)"
+    folder3 = "$(folder1)/$(discount_factor)/seed_$(seed)_cut_$(cut_max)"
     if !isdir(folder3)
         mkdir(folder3)
     end
@@ -206,10 +206,10 @@ end
     CSV.write("$(folder3)/approx_values.csv", DataFrame(approx_value_data))
 end
 
-function run_rvsddp(seed_list, parallel, iter_max_list, shift_function_list, discount_factor_list, refine_mode_list)
+function run_rvsddp(seed_list, parallel, cut_max_list, shift_function_list, discount_factor_list, refine_mode_list)
     for shift_function in shift_function_list
         for refine_mode in refine_mode_list
-            folder1 = "results_toy/$(shift_function)_$(refine_mode)_parallel_$(parallel)"
+            folder1 = "results_msppy/$(shift_function)_$(refine_mode)_parallel_$(parallel)"
             if !isdir(folder1)
                 mkdir(folder1)
             end
@@ -221,10 +221,10 @@ function run_rvsddp(seed_list, parallel, iter_max_list, shift_function_list, dis
             end
         end
     end
-    combos = [(seed, parallel, iter_max, shift_function, discount_factor, refine_mode) for seed in seed_list for iter_max in iter_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list]
+    combos = [(seed, parallel, cut_max, shift_function, discount_factor, refine_mode) for seed in seed_list for cut_max in cut_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list]
 
-    results = pmap(combos) do (seed, parallel, iter_max, shift_function, discount_factor, refine_mode)
-        rvsddp_job(seed, parallel, iter_max, shift_function, discount_factor, refine_mode)
+    results = pmap(combos) do (seed, parallel, cut_max, shift_function, discount_factor, refine_mode)
+        rvsddp_job(seed, parallel, cut_max, shift_function, discount_factor, refine_mode)
     end
     return 
 end
@@ -264,8 +264,8 @@ end
 
 end
 
-function run_evaluate(seed_list, iter_max_list, shift_function_list, discount_factor_list, refine_mode_list, iter_list, N_list)
-    combos = [("results_msppy/$(shift_function)_$(refine_mode)_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_iter_$(iter_max)", iter, N, discount_factor) for seed in seed_list for iter_max in iter_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list for iter in iter_list for N in N_list]
+function run_evaluate(seed_list, cut_max_list, shift_function_list, discount_factor_list, refine_mode_list, iter_list, N_list)
+    combos = [("results_msppy/$(shift_function)_$(refine_mode)_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_cut_$(cut_max)", iter, N, discount_factor) for seed in seed_list for cut_max in cut_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list for iter in iter_list for N in N_list]
 
     results = pmap(combos) do (folder, iter, N, discount_factor)
         evaluate_job(folder, iter, N, discount_factor)
@@ -303,8 +303,8 @@ end
 
 end
 
-function run_active(seed_list, iter_max_list, shift_function_list, discount_factor_list, refine_mode_list, iter_list)
-    combos = [("results_msppy/$(shift_function)_$(refine_mode)_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_iter_$(iter_max)", iter_list, discount_factor) for seed in seed_list for iter_max in iter_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list]
+function run_active(seed_list, cut_max_list, shift_function_list, discount_factor_list, refine_mode_list, iter_list)
+    combos = [("results_msppy/$(shift_function)_$(refine_mode)_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_cut_$(cut_max)", iter_list, discount_factor) for seed in seed_list for cut_max in cut_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list]
 
     results = pmap(combos) do (folder, iter, discount_factor)
         active_job(folder, iter, discount_factor)

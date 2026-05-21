@@ -1035,6 +1035,7 @@ function iteration(model::PolicyGraph{T}, options::Options) where {T}
             options.log,
             Log(
                 length(options.log) + 1,
+                sum([length(node.value_function.cut_V) for (_,node) in model.nodes]),
                 bound,
                 forward_trajectory[1].cumulative_value,
                 time() - options.start_time,
@@ -1164,6 +1165,7 @@ There is also a special option for infinite horizon problems
 """
 function train(
     model::PolicyGraph;
+    cut_limit::Union{Int,Nothing} = nothing,
     iteration_limit::Union{Int,Nothing} = nothing,
     time_limit::Union{Real,Nothing} = nothing,
     print_level::Int = 0,
@@ -1300,6 +1302,9 @@ function train(
     end
     if time_limit !== nothing
         push!(stopping_rules, TimeLimit(time_limit))
+    end
+    if cut_limit !== nothing
+        push!(stopping_rules, CutLimit(cut_limit))
     end
     # If no stopping rule exists, add the default rule.
     if isempty(stopping_rules)

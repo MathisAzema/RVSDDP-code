@@ -734,6 +734,7 @@ end
 
 struct Log
     iteration::Int
+    nb_cuts::Int
     bound::Float64
     simulation_value::Float64
     time::Float64
