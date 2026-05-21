@@ -639,6 +639,7 @@ function _refine_at_initial_point(
     if options.infinite
         node_index = length(model.nodes)
         node =  model[node_index]
+        next_node = model[node.children[1].term]
         items = BackwardPassItems(T, Noise)
         outgoing_state = model.initial_root_state
 
@@ -652,7 +653,7 @@ function _refine_at_initial_point(
             options.duality_handler,
             options,
         )
-        shift=options.shift_function(model, node, [items], [outgoing_state])
+        shift=options.shift_function(model, next_node, [items], [outgoing_state])
 
         new_cuts = refine_bellman_function(
             model,
@@ -670,7 +671,7 @@ function _refine_at_initial_point(
             time()-options.start,
         )
         
-        _update_delta(model[node.children[1].term], outgoing_state, items.probability, items.objectives)
+        _update_delta(next_node, outgoing_state, items.probability, items.objectives)
     else
         node_index = 1
         node =  model[node_index]
@@ -687,7 +688,7 @@ function _refine_at_initial_point(
             options.duality_handler,
             options,
         )
-        shift = 0.0
+        shift=options.shift_function(model, node, [items], [incoming_state])
 
         πᵏ = Dict(key => 0.0 for key in keys(incoming_state))
         θᵏ = 0.0
@@ -702,10 +703,16 @@ function _refine_at_initial_point(
             end
         end
 
+        for (key, x) in incoming_state
+            θᵏ -= πᵏ[key] * x
+        end
+
         iteration = length(options.log)+1
 
         cut = Cut(iteration, time() - options.start, θᵏ, πᵏ, nothing, nothing, 1, nothing, incoming_state)
-        # println(cut)
+
+        _update_value_function(node, cut, shift, nothing)
+        _update_delta(node, incoming_state, items.probability, items.objectives)
         return []
     end
     # println(new_cuts)
@@ -732,18 +739,17 @@ function backward_pass(
     # TODO(odow): improve storage type.
     cuts = Dict{T,Vector{Any}}(index => Any[] for index in keys(model.nodes))
     for index in scenario_length:-1:1
+        node_index, _ = trajectory[1].scenario_path[index]
+        node =  model[node_index]
+        if length(node.children) == 0
+            continue
+        end
         if index in index_to_refine || options.refine_mode == 0
-            node_index, _ = trajectory[1].scenario_path[index]
-            node =  model[node_index]
             items_traj = [BackwardPassItems(T, Noise) for _ in trajectory]
             outgoing_states = [traj.sampled_states[index] for traj in trajectory]
             for (index_traj,traj) in enumerate(trajectory)
-
                 outgoing_state = outgoing_states[index_traj]
                 items = items_traj[index_traj]
-                if length(node.children) == 0
-                    continue
-                end
                 solve_all_children(
                     model,
                     node,
@@ -755,11 +761,13 @@ function backward_pass(
                     options,
                 )
             end
-            shift=options.shift_function(model, node, items_traj, outgoing_states)
+
+            next_node = model[node.children[1].term]
+            shift=options.shift_function(model, next_node, items_traj, outgoing_states)
             if index <= length(model.nodes)-1
                 outgoing_state = outgoing_states[1]
                 items = items_traj[1]
-                _update_delta(model[node.children[1].term], outgoing_state, items.probability, items.objectives)
+                _update_delta(next_node, outgoing_state, items.probability, items.objectives)
             end
             for (index_traj, traj) in enumerate(trajectory)
                 outgoing_state = outgoing_states[index_traj]

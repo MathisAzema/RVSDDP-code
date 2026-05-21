@@ -646,7 +646,7 @@ mutable struct Cut2
     coefficients::Dict{Symbol,Float64}
     shift::Vector{Tuple{Float64,Int64}}
     constraint_V::JuMP.ConstraintRef
-    constraint_subproblem::JuMP.ConstraintRef
+    constraint_subproblem::Union{Nothing, JuMP.ConstraintRef}
     state::Dict{Symbol,Float64}
 end
 

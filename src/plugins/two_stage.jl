@@ -307,22 +307,6 @@ function compute_V(
 end
 
 
-# function compute_approx_TV(
-#     vf::Value_Function,
-#     incoming_state::Dict{Symbol,Float64}
-# )
-#     model=vf.model_TV
-#     for (i, value) in incoming_state
-#         JuMP.fix(vf.states_TV[i], value; force=true)
-#     end
-#     JuMP.optimize!(model)
-#     obj=JuMP.objective_value(model)
-#     for (i, value) in incoming_state
-#         JuMP.unfix(vf.states_TV[i])
-#     end
-#     return obj
-# end
-
 function compute_approx_TV(
     vf::Value_Function,
     incoming_state::Dict{Symbol,Float64}
@@ -330,40 +314,6 @@ function compute_approx_TV(
     val = maximum([cut.intercept + sum(cut.coefficients[i] * x for (i,x) in incoming_state) for cut in vf.cut_TV])
     return val
 end
-
-# function compute_inf_approx_TV(
-#     vf::Value_Function,
-# )
-#     mod=vf.model_TV
-#     JuMP.optimize!(mod)
-#     inf_TV_k=JuMP.objective_value(mod)
-#     solution=Dict(i => value.(x) for (i,x) in vf.states_TV)
-#     return (inf_TV_k, solution)
-# end
-
-# function compute_V2(
-#     vf::Value_Function,
-#     incoming_state::Dict{Symbol,Float64}
-# )
-#     model=vf.model
-#     for (i, value) in incoming_state
-#         JuMP.fix(vf.states[i], value; force=true)
-#     end
-#     JuMP.optimize!(model)
-#     obj=JuMP.objective_value(model)
-
-#     dual_sign = JuMP.objective_sense(model) == MOI.MIN_SENSE ? 1 : -1
-#     λ = Dict{Symbol,Float64}(
-#         name => dual_sign * JuMP.dual(JuMP.FixRef(state)) for
-#         (name, state) in vf.states
-#     )
-
-
-#     for (i, value) in incoming_state
-#         JuMP.unfix(vf.states[i])
-#     end
-#     return obj, λ
-# end
 
 function compute_V2(
     vf::Value_Function,

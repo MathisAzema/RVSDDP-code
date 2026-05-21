@@ -138,7 +138,7 @@ function _add_cut_constraint_to_model(
     )
     cut.constraint_ref = if JuMP.objective_sense(mod) == MOI.MIN_SENSE
         csp = @constraint(mod, expr >= cut.intercept-shift[1])
-        _update_value_function(model, node, cut, shift, csp)
+        _update_value_function(model[node.children[1].term], cut, shift, csp)
     else
         @constraint(mod, expr <= cut.intercept)
     end
@@ -148,45 +148,38 @@ function _add_cut_constraint_to_model(
 end
 
 function _update_value_function(
-    model::PolicyGraph{T}, 
     node::Node{T}, 
     cut::Cut, 
     shift::Tuple{Float64, Int64},
-    csp::JuMP.ConstraintRef
+    csp::Union{Nothing, JuMP.ConstraintRef}
 ) where {T}
 
-    # TV
-    for child in node.children
-        child_node=model[child.term]
-        child_vf=child_node.value_function
+    vf=node.value_function
 
-        md_V = child_vf.model
-        cV = @constraint(md_V, child_vf.theta-sum(cut.coefficients[i]*x for (i,x) in child_vf.states)>=cut.intercept-shift[1])
-        
-        cutV = Cut2(
-            cut.iteration,
-            cut.time,
-            cut.intercept,
-            cut.coefficients,
-            [shift],
-            cV,
-            csp,
-            cut.state,
-        )
+    md_V = vf.model
+    cV = @constraint(md_V, vf.theta-sum(cut.coefficients[i]*x for (i,x) in vf.states)>=cut.intercept-shift[1])
     
-        push!(child_node.value_function.cut_V, cutV)
+    cutV = Cut2(
+        cut.iteration,
+        cut.time,
+        cut.intercept,
+        cut.coefficients,
+        [shift],
+        cV,
+        csp,
+        cut.state,
+    )
 
-        md_TV = child_vf.model_TV
-        @constraint(md_TV, child_vf.theta_TV -sum(cut.coefficients[i]*x for (i,x) in child_vf.states_TV)>=cut.intercept)
+    push!(node.value_function.cut_V, cutV)
 
-        cutTV = Cut3(
-            cut.intercept,
-            cut.coefficients,
-        )
-        push!(child_node.value_function.cut_TV, cutTV)
-    end
+    md_TV = vf.model_TV
+    @constraint(md_TV, vf.theta_TV -sum(cut.coefficients[i]*x for (i,x) in vf.states_TV)>=cut.intercept)
 
-    #Get cst in node
+    cutTV = Cut3(
+        cut.intercept,
+        cut.coefficients,
+    )
+    push!(node.value_function.cut_TV, cutTV)
     return
 end
 
@@ -589,8 +582,7 @@ function no_shift(
     items_traj::Vector{BackwardPassItems{T, Noise}},
     outgoing_states::Vector{Dict{Symbol, Float64}},
 ) where {T}
-    node_next = model[(node.index)%length(model.nodes)+1]
-    return (0.0, length(node_next.value_function.cut_V)+1)
+    return (0.0, length(node.value_function.cut_V)+1)
 end
 
 function update_shift(
@@ -603,7 +595,9 @@ function update_shift(
         if shift_k < cut.shift[end][1]
             push!(cut.shift, (shift_k, iter))
             set_normalized_rhs(cut.constraint_V, cut.intercept-shift_k)
-            set_normalized_rhs(cut.constraint_subproblem, cut.intercept-shift_k)
+            if cut.constraint_subproblem !== nothing
+                set_normalized_rhs(cut.constraint_subproblem, cut.intercept-shift_k)
+            end
         end
     end
 end
@@ -616,42 +610,36 @@ function shift_update_random_forward(
 ) where {T}
     res_traj=[0.0 for i in 1:length(items_traj)]
     shift=0.0
-    for child in node.children
-        child_node=model[child.term]
-        for (i, items) in enumerate(items_traj)
-            state = outgoing_states[i]
-            θᵏ=0.0
-            for j in 1:length(items.objectives)
-                p = items.probability[j]
-                θᵏ += p * items.objectives[j]
-            end
-            TVx=θᵏ
-            Vx=compute_V(child_node.value_function, state)
-            res_traj[i]=(TVx-Vx)
+    for (i, items) in enumerate(items_traj)
+        state = outgoing_states[i]
+        θᵏ=0.0
+        for j in 1:length(items.objectives)
+            p = items.probability[j]
+            θᵏ += p * items.objectives[j]
         end
-        shift, k=findmin(res_traj)
-        sol=Dict{Symbol,Float64}()
-        two_stage=child_node.two_stage
-        for (i,x) in outgoing_states[1]
-            lb=two_stage.lower_bounds[i]
-            ub=two_stage.upper_bounds[i]
-            sol[i]=rand()*(ub-lb)+lb
-        end
-        Vrand=compute_V(child_node.value_function, sol)
-        TVrandapprox = compute_approx_TV(child_node.value_function, sol)
-        shift_rand=Inf
-        if TVrandapprox-Vrand<= shift-1e-4
-            TVjensenrand=compute_jensen_TV(child_node, sol)
-            if TVjensenrand-Vrand <= shift-1e-4
-                TVrand=compute_TV(child_node, sol)
-                shift_rand=TVrand-Vrand
-            end
-        end
-        shift = min(shift, shift_rand)
-        update_shift(model, child_node, shift)
+        TVx=θᵏ
+        Vx=compute_V(node.value_function, state)
+        res_traj[i]=(TVx-Vx)
     end
-    node_next = model[(node.index)%length(model.nodes)+1]
-    return (shift, length(node_next.value_function.cut_V)+1)
+    shift, k=findmin(res_traj)
+    sol=Dict{Symbol,Float64}()
+    two_stage=node.two_stage
+    for (i,x) in outgoing_states[1]
+        lb=two_stage.lower_bounds[i]
+        ub=two_stage.upper_bounds[i]
+        sol[i]=rand()*(ub-lb)+lb
+    end
+    Vrand=compute_V(node.value_function, sol)
+    TVrandapprox = compute_approx_TV(node.value_function, sol)
+    shift_rand=Inf
+    if TVrandapprox-Vrand<= shift-1e-4
+        TVrand=compute_TV(node, sol)
+        shift_rand=TVrand-Vrand
+    end
+    shift = min(shift, shift_rand)
+    update_shift(model, node, shift)
+        
+    return (shift, length(node.value_function.cut_V)+1)
 end
 
 function shift_forward(
@@ -1483,19 +1471,24 @@ end
 
 function compute_hat_delta(
     deltas::Vector{Vector{Float64}},
-    horizon::Int64,
     time_step::Int64,
     iteration::Int64,
-    discount_factor::Float64,
+    discount_factor::Float64;
+    period::Int64=1,
+    infinite=true,
 )
-    node_index=(time_step-1)%horizon + 1
-    res = 0.0
+    if infinite
+        node_index=(time_step-1)%period + 1
+        res = 0.0
 
-    for t in 0:(horizon-1)
-        node_index_t = (node_index+t-1)%horizon + 1
-        res+= deltas[node_index_t][iteration]*discount_factor^t/(1-discount_factor^horizon)
+        for t in 0:(period-1)
+            node_index_t = (node_index+t-1)%period + 1
+            res+= deltas[node_index_t][iteration]*discount_factor^t/(1-discount_factor^period)
+        end
+        return res
+    else
+        return sum(deltas[node_index][iteration]*discount_factor^(node_index-1) for node_index in 1:length(deltas))
     end
-    return res
 end
 
 function compute_cost_end_of_horizon(
