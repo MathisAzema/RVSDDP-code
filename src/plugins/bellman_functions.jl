@@ -1469,26 +1469,23 @@ function compute_approx_value(
     return res
 end
 
-function compute_hat_delta(
-    deltas::Vector{Vector{Float64}},
-    time_step::Int64,
-    iteration::Int64,
+function compute_hat_delta_infinite(
+    deltas::Vector{Float64},
     discount_factor::Float64;
     period::Int64=1,
-    infinite=true,
 )
-    if infinite
-        node_index=(time_step-1)%period + 1
-        res = 0.0
 
-        for t in 0:(period-1)
-            node_index_t = (node_index+t-1)%period + 1
-            res+= deltas[node_index_t][iteration]*discount_factor^t/(1-discount_factor^period)
-        end
-        return res
-    else
-        return sum(deltas[node_index][iteration]*discount_factor^(node_index-1) for node_index in 1:length(deltas))
+    if length(deltas) != period
+        error("Length of deltas must be equal to the period.")
     end
+    return sum(deltas[node_index]*discount_factor^(node_index-1) for node_index in 1:length(deltas))/(1-discount_factor^period)
+end
+
+function compute_hat_delta_finite(
+    deltas::Vector{Float64},
+    discount_factor::Float64
+)
+    return sum(deltas[node_index]*discount_factor^(node_index-1) for node_index in 1:length(deltas))
 end
 
 function compute_cost_end_of_horizon(

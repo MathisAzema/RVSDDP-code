@@ -1402,6 +1402,7 @@ end
 function _simulate(
     model::PolicyGraph{T},
     variables::Vector{Symbol};
+    infinite::Bool=true,
     sampling_scheme::AbstractSamplingScheme,
     custom_recorders::Dict{Symbol,Function},
     duality_handler::Union{Nothing,AbstractDualityHandler},
@@ -1469,7 +1470,7 @@ function _simulate(
                 :outgoing_state => subproblem_results.state,
                 :belief => copy(current_belief),
             )
-            if depth == length_scenario_path
+            if depth == length_scenario_path && infinite
                 store[:cost_end_of_horizon] = compute_cost_end_of_horizon(model, length_scenario_path+1, subproblem_results.state)
             end
             if objective_state_vector !== nothing && N == 1
@@ -1615,6 +1616,7 @@ function simulate(
     model::PolicyGraph,
     number_replications::Int = 1,
     variables::Vector{Symbol} = Symbol[];
+    infinite::Bool=true,
     sampling_scheme::AbstractSamplingScheme = InSampleMonteCarlo(),
     custom_recorders = Dict{Symbol,Function}(),
     duality_handler::Union{Nothing,AbstractDualityHandler} = nothing,
@@ -1627,6 +1629,7 @@ function simulate(
         parallel_scheme,
         number_replications,
         variables;
+        infinite=infinite,
         sampling_scheme = sampling_scheme,
         custom_recorders = custom_recorders,
         duality_handler = duality_handler,
