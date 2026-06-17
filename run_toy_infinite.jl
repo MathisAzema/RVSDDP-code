@@ -65,7 +65,7 @@ end
 
 @everywhere using CSV, DataFrames, JSON
 
-@everywhere function rvsddp_job(seed, parallel, cut_max, shift_function, discount_factor, refine_mode)
+@everywhere function rvsddp_job(seed, parallel, iter_max, shift_function, discount_factor, refine_mode)
     model = RVSDDP.PolicyGraph(
         subproblem_builder,
         graph;
@@ -76,7 +76,7 @@ end
     )
 
     Random.seed!(seed)
-    Cuts=RVSDDP.train(model; refine_mode=refine_mode, parallel=parallel, sampling_scheme=RVSDDP.InSampleMonteCarlo(max_depth=10000000, rollout_limit = i -> i, parallel=parallel), cut_limit = cut_max, infinite = true, shift_function=shift_function); 
+    Cuts=RVSDDP.train(model; refine_mode=refine_mode, parallel=parallel, sampling_scheme=RVSDDP.InSampleMonteCarlo(max_depth=10000000, rollout_limit = i -> i, parallel=parallel), iteration_limit = iter_max, infinite = true, shift_function=shift_function); 
 
     cuts_data = []
     for (_, node) in model.nodes
@@ -106,7 +106,7 @@ end
         mkdir(folder2)
     end
 
-    folder3 = "$(folder1)/$(discount_factor)/seed_$(seed)_cut_$(cut_max)"
+    folder3 = "$(folder1)/$(discount_factor)/seed_$(seed)_iter_$(iter_max)"
     if !isdir(folder3)
         mkdir(folder3)
     end
@@ -138,7 +138,7 @@ end
     CSV.write("$(folder3)/approx_values.csv", DataFrame(approx_value_data))
 end
 
-function run_rvsddp(seed_list, parallel, cut_max_list, shift_function_list, discount_factor_list, refine_mode_list)
+function run_toy_infinite(seed_list, parallel, iter_max_list, shift_function_list, discount_factor_list, refine_mode_list)
     for shift_function in shift_function_list
         for refine_mode in refine_mode_list
             folder1 = "results_toy/$(shift_function)_$(refine_mode)_parallel_$(parallel)"
@@ -154,17 +154,17 @@ function run_rvsddp(seed_list, parallel, cut_max_list, shift_function_list, disc
         end
     end
 
-    combos = [(seed, parallel, cut_max, shift_function, discount_factor, refine_mode) for seed in seed_list for cut_max in cut_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list]
+    combos = [(seed, parallel, iter_max, shift_function, discount_factor, refine_mode) for seed in seed_list for iter_max in iter_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list]
 
-    results = pmap(combos) do (seed, parallel, cut_max, shift_function, discount_factor, refine_mode)
-        rvsddp_job(seed, parallel, cut_max, shift_function, discount_factor, refine_mode)
+    results = pmap(combos) do (seed, parallel, iter_max, shift_function, discount_factor, refine_mode)
+        rvsddp_job(seed, parallel, iter_max, shift_function, discount_factor, refine_mode)
     end
     return 
 end
 
-@everywhere function evaluate_job(folder, iter, N, discount_factor)
+@everywhere function evaluate_job(folder, iter_limit, N, discount_factor)
 
-    TimeHorizon = Int(round(log(0.001)/log(discount_factor)))
+    TimeHorizon = Int(ceil(log(0.001)/(log(discount_factor))))
 
     model = RVSDDP.PolicyGraph(
         subproblem_builder,
@@ -175,7 +175,7 @@ end
         discount_factor=discount_factor,
     )
 
-    RVSDDP.add_cuts(model, iter, folder);
+    RVSDDP._add_cuts_iter(model, iter_limit, folder);
 
     Random.seed!(12345)
 
@@ -184,7 +184,10 @@ end
             N;
             sampling_scheme = RVSDDP.InSampleMonteCarlo(max_depth=TimeHorizon),
         )
+
     oos_horizon = [sum((discount_factor^(t-1))*simulations[k][t][:stage_objective] for t in 1:TimeHorizon) for k in 1:N]
+    oos_5 = [sum((discount_factor^(t-1))*simulations[k][t][:stage_objective] for t in 1:min(5*12,TimeHorizon)) for k in 1:N]
+    oos_10 = [sum((discount_factor^(t-1))*simulations[k][t][:stage_objective] for t in 1:min(10*12,TimeHorizon)) for k in 1:N]
     oos_end_of_horizon = [simulations[k][TimeHorizon][:cost_end_of_horizon] for k in 1:N]
 
     folder_res = "$(folder)/oos"
@@ -192,16 +195,57 @@ end
         mkdir(folder_res)
     end
 
-    CSV.write("$(folder_res)/oos_horizon_$(iter)_$(TimeHorizon).csv", DataFrame(iteration=1:N, oos_horizon=oos_horizon))
-    CSV.write("$(folder_res)/oos_end_of_horizon_$(iter)_$(TimeHorizon).csv", DataFrame(iteration=1:N, oos_end_of_horizon=oos_end_of_horizon))
+    CSV.write("$(folder_res)/oos_horizon_$(iter_limit)_$(TimeHorizon)_$N.csv", DataFrame(iteration=1:N, oos_horizon=oos_horizon))
+    CSV.write("$(folder_res)/oos_end_of_horizon_$(iter_limit)_$(TimeHorizon)_$N.csv", DataFrame(iteration=1:N, oos_end_of_horizon=oos_end_of_horizon))
+    CSV.write("$(folder_res)/oos_5_$(iter_limit)_$(TimeHorizon)_$N.csv", DataFrame(iteration=1:N, oos_horizon=oos_5))
+    CSV.write("$(folder_res)/oos_10_$(iter_limit)_$(TimeHorizon)_$N.csv", DataFrame(iteration=1:N, oos_horizon=oos_10))
 
 end
 
-function run_evaluate(seed_list, cut_max_list, shift_function_list, discount_factor_list, iter_list, refine_mode_list, N_list)
-    combos = [("results_toy/$(shift_function)_$(refine_mode)_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_cut_$(cut_max)", iter, N, discount_factor) for seed in seed_list for cut_max in cut_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list for iter in iter_list for N in N_list]
+function run_evaluate(seed_list, parallel, iter_max_list, shift_function_list, discount_factor_list, iter_list, refine_mode_list, N_list)
+    combos = [("results_toy/$(shift_function)_$(refine_mode)_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_iter_$(iter_max)", iter_limit, N, discount_factor) for seed in seed_list for iter_max in iter_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list for iter_limit in iter_list for N in N_list]
 
-    results = pmap(combos) do (folder, iter, N, discount_factor)
-        evaluate_job(folder, iter, N, discount_factor)
+    results = pmap(combos) do (folder, iter_limit, N, discount_factor)
+        evaluate_job(folder, iter_limit, N, discount_factor)
+    end
+    return 
+end
+
+@everywhere function active_job_toy(folder, iter_list, discount_factor)
+
+    active_cuts_data = []
+    for iter_limit in iter_list
+        model = RVSDDP.PolicyGraph(
+            subproblem_builder,
+            graph;
+            sense = :Min,
+            lower_bound = 0.0,
+            optimizer = optimizer,
+            discount_factor=discount_factor,
+        )
+
+        RVSDDP._add_cuts_iter(model, iter_limit, folder);
+
+        active_cuts = Int.(round.(RVSDDP.count_all_active_cuts(model, 1e-4)))
+
+        for t in 1:1
+            push!(active_cuts_data, Dict(
+                :time => iter_limit,
+                :stage => t,
+                :num_active_cuts => active_cuts[t],
+            ))
+        end
+    end
+
+    CSV.write("$(folder)/active_cuts.csv", DataFrame(active_cuts_data))
+
+end
+
+function run_active_toy(seed_list, parallel, iter_max_list, shift_function_list, discount_factor_list, refine_mode_list, iter_list)
+    combos = [("results_toy/$(shift_function)_$(refine_mode)_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_iter_$(iter_max)", iter_list, discount_factor) for seed in seed_list for iter_max in iter_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list]
+
+    results = pmap(combos) do (folder, iter, discount_factor)
+        active_job_toy(folder, iter, discount_factor)
     end
     return 
 end

@@ -14,7 +14,6 @@ elseif nworkers() ==1
 else
     addprocs(Nbworkers - nworkers())
 end
-
 println(nworkers())
 
 @everywhere import Pkg
@@ -119,8 +118,8 @@ println(nworkers())
         sum(exchange[:, 5]) == sum(exchange[5, :])
     end)
     if t != 1 || true  # t=1 is handled in the @variable constructor.
-        r = t % TimeHorizon == 0 ? TimeHorizon : t % TimeHorizon
-        RVSDDP.parameterize(sp, Ω[r], P) do ω
+        r = (t - 1) % TimeHorizon == 0 ? TimeHorizon : (t - 1) % TimeHorizon
+        RVSDDP.parameterize(sp, Ω[t], P) do ω
             for i in 1:4
                 JuMP.fix(inflow[i], ω[i])
             end
@@ -133,11 +132,11 @@ println(nworkers())
     end
 end
 
-@everywhere graph=RVSDDP.LinearGraph(120);
+@everywhere graph=RVSDDP.InfiniteLinearGraph(12);
 
 @everywhere using CSV, DataFrames, JSON
 
-@everywhere function rvsddp_job(seed, parallel, time_max, shift_function, discount_factor)
+@everywhere function rvsddp_periodic_job(seed, parallel, time_max, shift_function, discount_factor, refine_mode)
     model = RVSDDP.PolicyGraph(
         msppy_hydro_thermal_builder,
         graph;
@@ -149,7 +148,7 @@ end
 
     Random.seed!(seed)
     
-    RVSDDP.train(model; refine_mode=0, parallel=parallel, time_limit = time_max, infinite = false, shift_function=shift_function); 
+    RVSDDP.train(model; refine_mode=refine_mode, parallel=parallel, sampling_scheme=RVSDDP.InSampleMonteCarlo(max_depth=10000000, rollout_limit = i -> 12*10-1, parallel=parallel), time_limit = time_max, infinite = true, shift_function=shift_function); 
 
     cuts_data = []
     for (_, node) in model.nodes
@@ -169,7 +168,7 @@ end
     # Créer une DataFrame
     df_cuts = DataFrame(cuts_data)
 
-    folder1 = "results_msppy/$(shift_function)_finite_parallel_$(parallel)"
+    folder1 = "results_msppy/$(shift_function)_$(refine_mode)_parallel_$(parallel)"
     if !isdir(folder1)
         mkdir(folder1)
     end
@@ -211,30 +210,32 @@ end
     CSV.write("$(folder3)/approx_values.csv", DataFrame(approx_value_data))
 end
 
-function run_rvsddp_finite(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list)
+function run_rvsddp_periodic(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, refine_mode_list)
     for shift_function in shift_function_list
-        folder1 = "results_msppy/$(shift_function)_finite_parallel_$(parallel)"
-        if !isdir(folder1)
-            mkdir(folder1)
-        end
-        for discount_factor in discount_factor_list
-            folder2 = "$(folder1)/$(discount_factor)"
-            if !isdir(folder2)
-                mkdir(folder2)
+        for refine_mode in refine_mode_list
+            folder1 = "results_msppy/$(shift_function)_$(refine_mode)_parallel_$(parallel)"
+            if !isdir(folder1)
+                mkdir(folder1)
+            end
+            for discount_factor in discount_factor_list
+                folder2 = "$(folder1)/$(discount_factor)"
+                if !isdir(folder2)
+                    mkdir(folder2)
+                end
             end
         end
     end
-    combos = [(seed, parallel, time_max, shift_function, discount_factor) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list]
+    combos = [(seed, parallel, time_max, shift_function, discount_factor, refine_mode) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list]
 
-    results = pmap(combos) do (seed, parallel, time_max, shift_function, discount_factor)
-        rvsddp_job(seed, parallel, time_max, shift_function, discount_factor)
+    results = pmap(combos) do (seed, parallel, time_max, shift_function, discount_factor, refine_mode)
+        rvsddp_periodic_job(seed, parallel, time_max, shift_function, discount_factor, refine_mode)
     end
     return 
 end
 
 @everywhere function evaluate_job(folder, time_limit, N, discount_factor)
 
-    TimeHorizon = min(120, 12*Int(ceil(log(0.001)/(12*log(discount_factor)))))
+    TimeHorizon = 12*Int(ceil(log(0.001)/(12*log(discount_factor))))
 
     model = RVSDDP.PolicyGraph(
         msppy_hydro_thermal_builder,
@@ -245,19 +246,19 @@ end
         discount_factor=discount_factor,
     )
 
-    RVSDDP._add_cuts_finite(model, time_limit, folder);
+    RVSDDP._add_cuts(model, time_limit, folder);
 
     Random.seed!(12345)
 
     simulations= RVSDDP.simulate(
             model,
             N;
-            infinite=false,
             sampling_scheme = RVSDDP.InSampleMonteCarlo(max_depth=TimeHorizon),
         )
     oos_horizon = [sum((discount_factor^(t-1))*simulations[k][t][:stage_objective] for t in 1:TimeHorizon) for k in 1:N]
     oos_5 = [sum((discount_factor^(t-1))*simulations[k][t][:stage_objective] for t in 1:min(5*12,TimeHorizon)) for k in 1:N]
     oos_10 = [sum((discount_factor^(t-1))*simulations[k][t][:stage_objective] for t in 1:min(10*12,TimeHorizon)) for k in 1:N]
+    oos_end_of_horizon = [simulations[k][TimeHorizon][:cost_end_of_horizon] for k in 1:N]
 
     folder_res = "$(folder)/oos"
     if !isdir(folder_res)
@@ -265,13 +266,14 @@ end
     end
 
     CSV.write("$(folder_res)/oos_horizon_$(time_limit)_$(TimeHorizon).csv", DataFrame(iteration=1:N, oos_horizon=oos_horizon))
+    CSV.write("$(folder_res)/oos_end_of_horizon_$(time_limit)_$(TimeHorizon).csv", DataFrame(iteration=1:N, oos_end_of_horizon=oos_end_of_horizon))
     CSV.write("$(folder_res)/oos_5_$(time_limit)_$(TimeHorizon).csv", DataFrame(iteration=1:N, oos_horizon=oos_5))
     CSV.write("$(folder_res)/oos_10_$(time_limit)_$(TimeHorizon).csv", DataFrame(iteration=1:N, oos_horizon=oos_10))
 
 end
 
-function run_evaluate(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, time_list, N_list)
-    combos = [("results_msppy/$(shift_function)_finite_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)", time_limit, N, discount_factor) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for time_limit in time_list for N in N_list]
+function run_evaluate(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, refine_mode_list, time_list, N_list)
+    combos = [("results_msppy/$(shift_function)_$(refine_mode)_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)", time_limit, N, discount_factor) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list for time_limit in time_list for N in N_list]
 
     results = pmap(combos) do (folder, time_limit, N, discount_factor)
         evaluate_job(folder, time_limit, N, discount_factor)
@@ -279,7 +281,7 @@ function run_evaluate(seed_list, parallel, time_max_list, shift_function_list, d
     return 
 end
 
-@everywhere function active_job_finite(folder, time_list, discount_factor)
+@everywhere function active_job(folder, time_list, discount_factor)
 
     active_cuts_data = []
     for time_limit in time_list
@@ -292,11 +294,11 @@ end
             discount_factor=discount_factor,
         )
 
-        RVSDDP._add_cuts_finite(model, time_limit, folder);
+        RVSDDP._add_cuts(model, time_limit, folder);
 
         active_cuts = Int.(round.(RVSDDP.count_all_active_cuts(model, 1e-4)))
 
-        for t in 1:120
+        for t in 1:12
             push!(active_cuts_data, Dict(
                 :time => time_limit,
                 :stage => t,
@@ -309,11 +311,11 @@ end
 
 end
 
-function run_active_finite(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, time_list)
-    combos = [("results_msppy/$(shift_function)_finite_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)", time_list, discount_factor) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list]
+function run_active(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, refine_mode_list, time_list)
+    combos = [("results_msppy/$(shift_function)_$(refine_mode)_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)", time_list, discount_factor) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list]
 
     results = pmap(combos) do (folder, iter, discount_factor)
-        active_job_finite(folder, iter, discount_factor)
+        active_job(folder, iter, discount_factor)
     end
     return 
 end
