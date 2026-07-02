@@ -1,0 +1,22 @@
+\begin{table}[ht]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\caption{Comparison of methods for $\beta=0.995$. Costs are reported as mean $\pm$ standard deviation. A/T denotes the number of active cuts over total cuts (on average per stage).}
+\label{tab:comparison_beta_0995}
+\begin{tabular}{lcc|cc|cc}
+\toprule
+& \multicolumn{2}{c|}{600 s} & \multicolumn{2}{c|}{3600 s} & \multicolumn{2}{c}{36000 s} \\
+\cmidrule(r){2-3}
+\cmidrule(r){4-5}
+\cmidrule(l){6-7}
+Method & Cost & Cuts (A/T) & Cost & Cuts (A/T) & Cost & Cuts (A/T) \\
+\midrule
+Periodic SDDP & $5767 \pm 55$ & 41 / 1366 & $5641 \pm 48$ & 79 / 3852 & $5585 \pm 44$ & 184 / 12450 \\
+Cyclic SDDP & $5875 \pm 58$ & 54 / 1426 & $5679 \pm 48$ & 100 / 4112 & $5600 \pm 44$ & 216 / 13026 \\
+RV-SDDP\_10 & $0 \pm 0$ & 0 / 0 & $0 \pm 0$ & 0 / 0 & $0 \pm 0$ & 0 / 0 \\
+RV-SDDP & $5610 \pm 48$ & 188 / 885 & $5569 \pm 45$ & 492 / 2625 & $5553 \pm 44$ & 1356 / 8666 \\
+Finite SDDP & $2554 \pm 48$ & 48 / 256 & $2483 \pm 41$ & 130 / 947 & $2456 \pm 38$ & 430 / 3673 \\
+\bottomrule
+\end{tabular}
+\end{table}
