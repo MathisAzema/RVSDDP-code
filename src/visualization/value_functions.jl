@@ -702,66 +702,66 @@ function _add_cuts_iter(model::PolicyGraph, iteration::Int64, folder::String)
     return
 end
 
-# function _add_cuts(model::PolicyGraph, time::Int64, folder::String)
-#     if isfile("$(folder)/cuts.csv")
-#         df_cuts = CSV.read("$(folder)/cuts.csv", DataFrame)
+function _add_cuts_time(model::PolicyGraph, time::Int64, folder::String)
+    if isfile("$(folder)/cuts.csv")
+        df_cuts = CSV.read("$(folder)/cuts.csv", DataFrame)
 
-#         cuts = reconstruct_cuts(df_cuts)
+        cuts = reconstruct_cuts(df_cuts)
 
-#         T=length(model.nodes)
-#         limit = Dict()
-#         iteration_max=0
-#         for node_index in keys(model.nodes)
-#             node=model[node_index]
-#             vf=node.value_function
-#             index=node.index == 1 ? T : node.index - 1
-#             V=model[index].bellman_function.global_theta
-#             lim= 0
-#             for cut in cuts[1:end]
-#                 if cut.time<=time && cut.node == node_index
-#                     lim+=1
-#                     iteration_max = max(iteration_max, cut.iteration)
-#                 end
-#             end
-#             limit[node_index] = lim
-#          end
+        T=length(model.nodes)
+        limit = Dict()
+        iteration_max=0
+        for node_index in keys(model.nodes)
+            node=model[node_index]
+            vf=node.value_function
+            index=node.index == 1 ? T : node.index - 1
+            V=model[index].bellman_function.global_theta
+            lim= 0
+            for cut in cuts[1:end]
+                if cut.time<=time && cut.node == node_index
+                    lim+=1
+                    iteration_max = max(iteration_max, cut.iteration)
+                end
+            end
+            limit[node_index] = lim
+         end
 
-#         for cut in cuts
-#             if 1<=cut.iteration && cut.time<=time
-#                 node_index = cut.node
-#                 node=model[node_index]
-#                 vf=node.value_function
-#                 index=node.index == 1 ? T : node.index - 1
-#                 V=model[index].bellman_function.global_theta
-#                 intercept = cut.intercept
-#                 coefficient=Dict(Symbol(i) => val for (i, val) in cut.coefficients)
-#                 state = Dict(Symbol(i) => val for (i, val) in cut.state)
-#                 shift = 0.0
-#                 i = 1
-#                 while i<= length(cut.shift) && cut.shift[i][2]<=limit[node_index]
-#                     i += 1
-#                 end
-#                 shift = [(s[1], s[2]) for s in cut.shift[1:i-1]]
-#                 cV=@constraint(vf.model, vf.theta -sum(coefficient[i]*x for (i,x) in vf.states)>=intercept - shift[end][1])
-#                 @constraint(vf.model_TV, vf.theta_TV -sum(coefficient[i]*x for (i,x) in vf.states_TV)>=intercept)
-#                 cS=@constraint(model[index].subproblem, V.theta -sum(coefficient[i]*x for (i,x) in V.states)>=intercept-shift[end][1])
-#                 push!(vf.cut_V, Cut2(cut.iteration, cut.time, intercept, coefficient, shift, cV, cS, state))
-#             end
-#         end
+        for cut in cuts
+            if 1<=cut.iteration && cut.time<=time
+                node_index = cut.node
+                node=model[node_index]
+                vf=node.value_function
+                index=node.index == 1 ? T : node.index - 1
+                V=model[index].bellman_function.global_theta
+                intercept = cut.intercept
+                coefficient=Dict(Symbol(i) => val for (i, val) in cut.coefficients)
+                state = Dict(Symbol(i) => val for (i, val) in cut.state)
+                shift = 0.0
+                i = 1
+                while i<= length(cut.shift) && cut.shift[i][2]<=limit[node_index]
+                    i += 1
+                end
+                shift = [(s[1], s[2]) for s in cut.shift[1:i-1]]
+                cV=@constraint(vf.model, vf.theta -sum(coefficient[i]*x for (i,x) in vf.states)>=intercept - shift[end][1])
+                @constraint(vf.model_TV, vf.theta_TV -sum(coefficient[i]*x for (i,x) in vf.states_TV)>=intercept)
+                cS=@constraint(model[index].subproblem, V.theta -sum(coefficient[i]*x for (i,x) in V.states)>=intercept-shift[end][1])
+                push!(vf.cut_V, Cut2(cut.iteration, cut.time, intercept, coefficient, shift, cV, cS, state))
+            end
+        end
 
-#         df_approx_value = CSV.read("$(folder)/approx_values.csv", DataFrame)
-#         model.approx_value = [row.approx_value for row in eachrow(df_approx_value) if row.iteration<=iteration_max]
+        df_approx_value = CSV.read("$(folder)/approx_values.csv", DataFrame)
+        model.approx_value = [row.approx_value for row in eachrow(df_approx_value) if row.iteration<=iteration_max]
 
-#         df_delta = CSV.read("$(folder)/deltas.csv", DataFrame)
-#         for (_, node) in model.nodes
-#             node.delta = [row.delta for row in eachrow(df_delta) if row.node == node.index && row.iteration <= iteration_max]
-#          end
-#     else
-#         println("Fichier $folder non trouvé")
-#         return
-#     end
-#     return
-# end
+        df_delta = CSV.read("$(folder)/deltas.csv", DataFrame)
+        for (_, node) in model.nodes
+            node.delta = [row.delta for row in eachrow(df_delta) if row.node == node.index && row.iteration <= iteration_max]
+         end
+    else
+        println("Fichier $folder non trouvé")
+        return
+    end
+    return
+end
 
 function _add_cuts_finite(model::PolicyGraph, time::Int64, folder::String)
     if isfile("$(folder)/cuts.csv")

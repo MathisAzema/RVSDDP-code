@@ -12,11 +12,10 @@
 \cmidrule(l){6-7}
 Method & Cost & Cuts (A/T) & Cost & Cuts (A/T) & Cost & Cuts (A/T) \\
 \midrule
-Periodic SDDP & $2874 \pm 28$ & 54 / 1314 & $2816 \pm 25$ & 113 / 3721 & $2797 \pm 24$ & 260 / 10895 \\
-Cyclic SDDP & $2958 \pm 28$ & 71 / 1405 & $2825 \pm 25$ & 150 / 3978 & $2797 \pm 23$ & 317 / 11752 \\
+Periodic SDDP & \makecell[c]{$2874 \pm 28$ \\{\scriptsize (2646)}} & 54 / 1314 & \makecell[c]{$2816 \pm 25$ \\{\scriptsize (2713)}} & 113 / 3721 & \makecell[c]{$2797 \pm 24$ \\{\scriptsize (2752)}} & 260 / 10895 \\
+Cyclic SDDP & \makecell[c]{$2958 \pm 28$ \\{\scriptsize (2590)}} & 71 / 1405 & \makecell[c]{$2825 \pm 25$ \\{\scriptsize (2699)}} & 150 / 3978 & \makecell[c]{$2797 \pm 23$ \\{\scriptsize (2751)}} & 317 / 11752 \\
 RV-SDDP\_10 & $2833 \pm 26$ & 186 / 1281 & $2795 \pm 24$ & 458 / 3611 & $2787 \pm 23$ & 1103 / 10671 \\
 RV-SDDP & $2812 \pm 25$ & 172 / 890 & $2795 \pm 24$ & 423 / 2636 & $2785 \pm 23$ & 1259 / 8442 \\
-Finite SDDP & $1970 \pm 27$ & 47 / 252 & $1917 \pm 23$ & 132 / 938 & $1897 \pm 22$ & 438 / 3667 \\
 \bottomrule
 \end{tabular}
 \end{table}
