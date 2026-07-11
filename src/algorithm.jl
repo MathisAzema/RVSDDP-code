@@ -655,6 +655,8 @@ function _refine_at_initial_point(
         )
         shift=options.shift_function(model, next_node, [items], [outgoing_state])
 
+        _update_delta(next_node, outgoing_state, items.probability, items.objectives)
+
         new_cuts = refine_bellman_function(
             model,
             node,
@@ -671,7 +673,6 @@ function _refine_at_initial_point(
             time()-options.start,
         )
         
-        _update_delta(next_node, outgoing_state, items.probability, items.objectives)
     else
         node_index = 1
         node =  model[node_index]
@@ -731,10 +732,12 @@ function backward_pass(
 ) where {T}
     scenario_length = length(trajectory[1].scenario_path)
     period= length(model.nodes)
-    index_to_refine = 0:period-1
-    if Int(round(scenario_length/period)) >= 2
-        index_rand = rand(2:Int(round(scenario_length/period)))
-        index_to_refine = unique(vcat(0:period-1, (index_rand-1)*period:index_rand*period-1))
+
+    if options.refine_mode == 0
+        index_to_refine = 0:scenario_length-1
+    else
+        index_rand = rand(1:Int(round(scenario_length/period)))
+        index_to_refine = (index_rand-1)*period:index_rand*period-1
     end
     # TODO(odow): improve storage type.
     cuts = Dict{T,Vector{Any}}(index => Any[] for index in keys(model.nodes))
@@ -744,7 +747,7 @@ function backward_pass(
         if length(node.children) == 0
             continue
         end
-        if index in index_to_refine || options.refine_mode == 0
+        if index in index_to_refine
             items_traj = [BackwardPassItems(T, Noise) for _ in trajectory]
             outgoing_states = [traj.sampled_states[index] for traj in trajectory]
             for (index_traj,traj) in enumerate(trajectory)
@@ -764,7 +767,7 @@ function backward_pass(
 
             next_node = model[node.children[1].term]
             shift=options.shift_function(model, next_node, items_traj, outgoing_states)
-            if index <= length(model.nodes)-1
+            if index <= length(model.nodes)-1 || options.refine_mode == 1
                 outgoing_state = outgoing_states[1]
                 items = items_traj[1]
                 _update_delta(next_node, outgoing_state, items.probability, items.objectives)
@@ -792,9 +795,11 @@ function backward_pass(
             end
         end
     end
-    new_cuts_0 = _refine_at_initial_point(model, options)
-    push!(cuts[length(model.nodes)], new_cuts_0)
-    push!(model.approx_value, compute_approx_value(model))
+    if 0 in index_to_refine
+        new_cuts_0 = _refine_at_initial_point(model, options)
+        push!(cuts[length(model.nodes)], new_cuts_0)
+    end
+    push!(model.approx_value, (time()-options.start, compute_approx_value(model)))
     return cuts
 end
 

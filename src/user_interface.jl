@@ -771,7 +771,7 @@ mutable struct PolicyGraph{T}
     timer_output::TimerOutputs.TimerOutput
     lock::ReentrantLock
     discount_factor::Float64
-    approx_value::Vector{Float64}
+    approx_value::Vector{Tuple{Float64, Float64}}
 
     function PolicyGraph(sense::Symbol, root_node::T, discount_factor::Float64) where {T}
         if sense != :Min && sense != :Max

@@ -441,62 +441,6 @@ function compare_two_models(
     return Statistics.mean(oos1), Statistics.std(oos1), Statistics.mean(oos2), Statistics.std(oos2)
 end
 
-
-# function compare_models(
-#     list_of_models::Vector{PolicyGraph{T}};
-#     replications_min::Int=1,
-#     replications_max::Int=1,
-#     TimeHorizon::Int=1,
-#     discount_factor::Float64=0.99,
-# ) where {T}
-#     oos=[]
-
-#     Scenario=[Serialization.deserialize("scenario_oos/scenario_$k.jls") for k in replications_min:replications_max]
-
-#     Noise_scenario=Historical(Scenario)
-
-#     for i in 1:length(list_of_models)
-#         model2=list_of_models[i]
-#         simulations2 = simulate(
-#             model2,
-#             replications,
-#             [:inflow];
-#             sampling_scheme=Noise_scenario,
-#         )
-#         oos2 = [sum((discount_factor^(i-1))*simulations2[k][i][:stage_objective] for i in 1:TimeHorizon) for k in 1:replications]
-#         push!(oos, oos2)
-#     end
-
-#     return oos
-# end
-
-# function generate_scenario(
-#     list_of_models::Vector{PolicyGraph{T}};
-#     replications::Int=1,
-#     TimeHorizon::Int=1,
-#     discount_factor::Float64=0.99,
-# ) where {T}
-#     oos=[]
-#     model1=list_of_models[1]
-#     simulations1 = simulate(
-#         model1,
-#         replications,
-#         [:inflow, :storedEnergy];
-#         sampling_scheme=InSampleMonteCarlo(max_depth=TimeHorizon),
-#     )
-#     oos1 = [sum((discount_factor^(i-1))*simulations1[k][i][:stage_objective] for i in 1:TimeHorizon) for k in 1:replications]
-#     push!(oos, oos1)
-
-#     Scenario=[[((i-1)%length(model1.nodes)+1, simulations1[k][i][:inflow]) for i in 1:TimeHorizon] for k in 1:replications]
-
-#     Noise_scenario=Historical(Scenario)
-
-#     for k in 1:replications
-#         Serialization.serialize("scenario_oos/scenario_$k.jls", Scenario[k])
-#     end
-#     return Scenario
-# end
-
 function is_active(
     node::Node,
     intercept::Float64, 
@@ -514,29 +458,6 @@ function is_active(
     end
 end
 
-# function evolution_cuts(node::Node, model_jensen::PolicyGraph)
-#     N = length(model_jensen[node.index].value_function.cut_V)
-#     evol_cut = [[0 for k in i:N] for i in 1:N]
-#     V=node.bellman_function.global_theta
-#     vf=node.value_function
-#     for (i,cut) in enumerate(model_jensen[node.index].value_function.cut_V[1:N])
-#         intercept = cut.intercept
-#         coefficient=cut.coefficients
-#         shift=cut.shift[end]
-#         cV=@constraint(vf.model, vf.theta -sum(coefficient[i]*x for (i,x) in vf.states)>=intercept)
-#         @constraint(vf.model_TV, vf.theta_TV -sum(coefficient[i]*x for (i,x) in vf.states_TV)>=intercept + shift)
-#         cS=@constraint(node.subproblem, V.theta -sum(coefficient[i]*x for (i,x) in V.states)>=intercept)
-#         push!(vf.cut_V, Cut2(intercept, coefficient, [shift], cV, cS, cut.states))
-#         for (k,cutb) in enumerate(model_jensen[node.index].value_function.cut_V[1:i])
-#             interceptb = cutb.intercept
-#             coefficientb=cutb.coefficients
-#             evol_cut[k][i-k+1]=is_active(node, interceptb, coefficientb, 0.01)
-#             # println((i, k,is_active(node, interceptb, coefficientb, 0.01)))
-#         end
-#     end
-#     return evol_cut
-# end
-
 function count_active_cuts(
     node::Node, 
     tol::Float64
@@ -547,6 +468,7 @@ function count_active_cuts(
         coefficientb=cutb.coefficients 
         active_cuts+=is_active(node, interceptb-cutb.shift[end][1], coefficientb, tol)
     end
+    # println("Node $(node.index) has $(active_cuts) active cuts")
     return active_cuts
 end
 
@@ -558,71 +480,9 @@ function count_all_active_cuts(
     for (index,node) in model.nodes
         res[index] = count_active_cuts(node, tol)
     end
+    # println("Total number of active cuts: $(sum(res))")
     return res
 end
-
-function add_cuts(model_copy::PolicyGraph, model_to_copy::PolicyGraph, iteration::Int64)
-    T=length(model_copy.nodes)
-    for node_index in keys(model_copy.nodes)
-        node=model_copy[node_index]
-        vf=node.value_function
-        index=node.index == 1 ? T : node.index - 1
-        V=model_copy[index].bellman_function.global_theta
-        for cut in model_to_copy[node_index].value_function.cut_V[2:end]
-            if cut.iteration<=iteration
-                intercept = cut.intercept
-                coefficient=cut.coefficients
-                shift=cut.shift[end]
-                cV=@constraint(vf.model, vf.theta -sum(coefficient[i]*x for (i,x) in vf.states)>=intercept)
-                @constraint(vf.model_TV, vf.theta_TV -sum(coefficient[i]*x for (i,x) in vf.states_TV)>=intercept + shift[1])
-                cS=@constraint(model_copy[index].subproblem, V.theta -sum(coefficient[i]*x for (i,x) in V.states)>=intercept)
-                push!(vf.cut_V, Cut2(cut.iteration, cut.time, intercept, coefficient, [shift], cV, cS, cut.state))
-            end
-        end
-    end
-end
-
-# function add_cuts(model_copy::PolicyGraph, model_to_copy::PolicyGraph, iteration::Int64, is_active::Vector{Bool})
-#     T=length(model_copy.nodes)
-#     for node_index in keys(model_copy.nodes)
-#         node=model_copy[node_index]
-#         vf=node.value_function
-#         index=node.index == 1 ? T : node.index - 1
-#         V=model_copy[index].bellman_function.global_theta
-#         for (i,cut) in enumerate(model_to_copy[node_index].value_function.cut_V[1:end])
-#             if cut.iteration<=iteration && is_active[i] && i>=2
-#                 intercept = cut.intercept
-#                 coefficient=cut.coefficients
-#                 shift=cut.shift[end]
-#                 cV=@constraint(vf.model, vf.theta -sum(coefficient[i]*x for (i,x) in vf.states)>=intercept)
-#                 @constraint(vf.model_TV, vf.theta_TV -sum(coefficient[i]*x for (i,x) in vf.states_TV)>=intercept + shift[1])
-#                 cS=@constraint(model_copy[index].subproblem, V.theta -sum(coefficient[i]*x for (i,x) in V.states)>=intercept)
-#                 push!(vf.cut_V, Cut2(cut.iteration, cut.time, intercept, coefficient, [shift], cV, cS, cut.state))
-#             end
-#         end
-#     end
-# end
-
-# function add_cuts(model::PolicyGraph, iteration::Int64, filename::String)
-#     T=length(model_copy.nodes)
-#     for node_index in keys(model_copy.nodes)
-#         node=model_copy[node_index]
-#         vf=node.value_function
-#         index=node.index == 1 ? T : node.index - 1
-#         V=model_copy[index].bellman_function.global_theta
-#         for cut in model_to_copy[node_index].value_function.cut_V[2:end]
-#             if cut.iteration<=iteration
-#                 intercept = cut.intercept
-#                 coefficient=cut.coefficients
-#                 shift=cut.shift[end]
-#                 cV=@constraint(vf.model, vf.theta -sum(coefficient[i]*x for (i,x) in vf.states)>=intercept)
-#                 @constraint(vf.model_TV, vf.theta_TV -sum(coefficient[i]*x for (i,x) in vf.states_TV)>=intercept + shift)
-#                 cS=@constraint(model_copy[index].subproblem, V.theta -sum(coefficient[i]*x for (i,x) in V.states)>=intercept)
-#                 push!(vf.cut_V, Cut2(cut.iteration, cut.time, intercept, coefficient, [shift], cV, cS, cut.state))
-#             end
-#         end
-#     end
-# end
 
 function reconstruct_cuts(df)
     cuts = []
@@ -689,7 +549,7 @@ function _add_cuts_iter(model::PolicyGraph, iteration::Int64, folder::String)
         end
 
         df_approx_value = CSV.read("$(folder)/approx_values.csv", DataFrame)
-        model.approx_value = [row.approx_value for row in eachrow(df_approx_value) if row.iteration<=iteration]
+        model.approx_value = [(row.time, row.approx_value) for row in eachrow(df_approx_value) if row.iteration<=iteration]
 
         df_delta = CSV.read("$(folder)/deltas.csv", DataFrame)
         for (_, node) in model.nodes
@@ -750,7 +610,7 @@ function _add_cuts_time(model::PolicyGraph, time::Int64, folder::String)
         end
 
         df_approx_value = CSV.read("$(folder)/approx_values.csv", DataFrame)
-        model.approx_value = [row.approx_value for row in eachrow(df_approx_value) if row.iteration<=iteration_max]
+        model.approx_value = [(row.time, row.approx_value) for row in eachrow(df_approx_value) if row.iteration<=iteration_max]
 
         df_delta = CSV.read("$(folder)/deltas.csv", DataFrame)
         for (_, node) in model.nodes
@@ -811,7 +671,7 @@ function _add_cuts_finite(model::PolicyGraph, time::Int64, folder::String)
         end
 
         df_approx_value = CSV.read("$(folder)/approx_values.csv", DataFrame)
-        model.approx_value = [row.approx_value for row in eachrow(df_approx_value) if row.iteration<=iteration_max]
+        model.approx_value = [(row.time, row.approx_value) for row in eachrow(df_approx_value) if row.iteration<=iteration_max]
 
         df_delta = CSV.read("$(folder)/deltas.csv", DataFrame)
         for (_, node) in model.nodes
@@ -822,4 +682,25 @@ function _add_cuts_finite(model::PolicyGraph, time::Int64, folder::String)
         return
     end
     return
+end
+
+function add_cuts_to_model(model_copy::PolicyGraph, model_to_copy::PolicyGraph, iteration::Int64)
+    T=length(model_copy.nodes)
+    for node_index in keys(model_copy.nodes)
+        node=model_copy[node_index]
+        vf=node.value_function
+        index=node.index == 1 ? T : node.index - 1
+        V=model_copy[index].bellman_function.global_theta
+        for cut in model_to_copy[node_index].value_function.cut_V[2:end]
+            if cut.iteration<=iteration
+                intercept = cut.intercept
+                coefficient=cut.coefficients
+                shift=cut.shift[end]
+                cV=@constraint(vf.model, vf.theta -sum(coefficient[i]*x for (i,x) in vf.states)>=intercept)
+                @constraint(vf.model_TV, vf.theta_TV -sum(coefficient[i]*x for (i,x) in vf.states_TV)>=intercept + shift[1])
+                cS=@constraint(model_copy[index].subproblem, V.theta -sum(coefficient[i]*x for (i,x) in V.states)>=intercept)
+                push!(vf.cut_V, Cut2(cut.iteration, cut.time, intercept, coefficient, [shift], cV, cS, cut.state))
+            end
+        end
+    end
 end
