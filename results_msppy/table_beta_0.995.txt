@@ -12,10 +12,12 @@
 \cmidrule(l){6-7}
 Method & Cost & Cuts (A/T) & Cost & Cuts (A/T) & Cost & Cuts (A/T) \\
 \midrule
-Periodic SDDP & \makecell[c]{$5767 \pm 55$ \\{\scriptsize (5234)}} & 41 / 1366 & \makecell[c]{$5641 \pm 48$ \\{\scriptsize (5386)}} & 79 / 3852 & \makecell[c]{$5585 \pm 44$ \\{\scriptsize (5492)}} & 184 / 12450 \\
-Cyclic SDDP & \makecell[c]{$5875 \pm 58$ \\{\scriptsize (4935)}} & 54 / 1426 & \makecell[c]{$5679 \pm 48$ \\{\scriptsize (5294)}} & 100 / 4112 & \makecell[c]{$5600 \pm 44$ \\{\scriptsize (5467)}} & 216 / 13026 \\
-RV-SDDP\_10 & $5641 \pm 48$ & 198 / 1314 & $5593 \pm 45$ & 420 / 3742 & $5558 \pm 44$ & 1091 / 12379 \\
-RV-SDDP & $5610 \pm 48$ & 188 / 885 & $5569 \pm 45$ & 492 / 2625 & $5553 \pm 44$ & 1356 / 8666 \\
+Periodic RV-SDDP & $5648 \pm 16$ & 148 / 821 & $5606 \pm 15$ & 339 / 2476 & $5585 \pm 14$ & 834 / 8296 \\
+Periodic SDDP & \makecell[c]{$5789 \pm 18$ \\{\scriptsize (5227)}} & 40 / 1247 & \makecell[c]{$5667 \pm 15$ \\{\scriptsize (5393)}} & 81 / 3584 & \makecell[c]{$5608 \pm 14$ \\{\scriptsize (5499)}} & 192 / 11583 \\
+Cyclic SDDP & \makecell[c]{$6127 \pm 18$ \\{\scriptsize (4968)}} & 50 / 1425 & \makecell[c]{$5828 \pm 16$ \\{\scriptsize (5299)}} & 101 / 4104 & \makecell[c]{$5623 \pm 15$ \\{\scriptsize (5467)}} & 230 / 13062 \\
+RV-SDDP\_10 & $5665 \pm 16$ & 209 / 1276 & $5606 \pm 15$ & 464 / 3645 & $5594 \pm 14$ & 1208 / 11660 \\
+RV-SDDP & $5654 \pm 16$ & 168 / 881 & $5606 \pm 15$ & 457 / 2623 & $5582 \pm 14$ & 1204 / 8691 \\
+SDDP\_10 & \makecell[c]{$6563 \pm 21$ \\{\scriptsize (4346)}} & 59 / 1403 & \makecell[c]{$5951 \pm 17$ \\{\scriptsize (5061)}} & 97 / 4083 & \makecell[c]{$5703 \pm 15$ \\{\scriptsize (5386)}} & 271 / 13123 \\
 \bottomrule
 \end{tabular}
 \end{table}

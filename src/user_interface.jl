@@ -1035,7 +1035,7 @@ function PolicyGraph(
             Dict{Symbol, Float64}(),
             Dict{Symbol, Float64}()
         )
-
+        
         valuefunction = initialize_value_function(sense, optimizer)
         node = Node(
             node_index,

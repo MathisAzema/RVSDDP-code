@@ -12,10 +12,12 @@
 \cmidrule(l){6-7}
 Method & Cost & Cuts (A/T) & Cost & Cuts (A/T) & Cost & Cuts (A/T) \\
 \midrule
-Periodic SDDP & \makecell[c]{$2874 \pm 28$ \\{\scriptsize (2646)}} & 54 / 1314 & \makecell[c]{$2816 \pm 25$ \\{\scriptsize (2713)}} & 113 / 3721 & \makecell[c]{$2797 \pm 24$ \\{\scriptsize (2752)}} & 260 / 10895 \\
-Cyclic SDDP & \makecell[c]{$2958 \pm 28$ \\{\scriptsize (2590)}} & 71 / 1405 & \makecell[c]{$2825 \pm 25$ \\{\scriptsize (2699)}} & 150 / 3978 & \makecell[c]{$2797 \pm 23$ \\{\scriptsize (2751)}} & 317 / 11752 \\
-RV-SDDP\_10 & $2833 \pm 26$ & 186 / 1281 & $2795 \pm 24$ & 458 / 3611 & $2787 \pm 23$ & 1103 / 10671 \\
-RV-SDDP & $2812 \pm 25$ & 172 / 890 & $2795 \pm 24$ & 423 / 2636 & $2785 \pm 23$ & 1259 / 8442 \\
+Periodic RV-SDDP & $2816 \pm 8$ & 139 / 824 & $2795 \pm 7$ & 351 / 2483 & $2785 \pm 7$ & 999 / 8312 \\
+Periodic SDDP & \makecell[c]{$2850 \pm 8$ \\{\scriptsize (2649)}} & 54 / 1221 & \makecell[c]{$2810 \pm 7$ \\{\scriptsize (2719)}} & 119 / 3520 & \makecell[c]{$2791 \pm 7$ \\{\scriptsize (2758)}} & 309 / 11425 \\
+Cyclic SDDP & \makecell[c]{$2890 \pm 8$ \\{\scriptsize (2588)}} & 69 / 1399 & \makecell[c]{$2822 \pm 7$ \\{\scriptsize (2699)}} & 144 / 4004 & \makecell[c]{$2793 \pm 7$ \\{\scriptsize (2754)}} & 340 / 12765 \\
+RV-SDDP\_10 & $2821 \pm 8$ & 198 / 1276 & $2799 \pm 7$ & 451 / 3644 & $2785 \pm 7$ & 1248 / 11668 \\
+RV-SDDP & $2817 \pm 8$ & 168 / 883 & $2792 \pm 7$ & 429 / 2635 & $2784 \pm 7$ & 1172 / 8716 \\
+SDDP\_10 & \makecell[c]{$3085 \pm 9$ \\{\scriptsize (2404)}} & 85 / 1388 & \makecell[c]{$2863 \pm 8$ \\{\scriptsize (2640)}} & 180 / 4031 & \makecell[c]{$2801 \pm 7$ \\{\scriptsize (2735)}} & 352 / 12856 \\
 \bottomrule
 \end{tabular}
 \end{table}

@@ -468,7 +468,6 @@ function count_active_cuts(
         coefficientb=cutb.coefficients 
         active_cuts+=is_active(node, interceptb-cutb.shift[end][1], coefficientb, tol)
     end
-    # println("Node $(node.index) has $(active_cuts) active cuts")
     return active_cuts
 end
 
@@ -480,7 +479,36 @@ function count_all_active_cuts(
     for (index,node) in model.nodes
         res[index] = count_active_cuts(node, tol)
     end
-    # println("Total number of active cuts: $(sum(res))")
+    return res
+end
+
+function compute_approx_delta(
+    node::Node
+)
+    res = Inf
+    vf=node.value_function
+    model = node.value_function.model_TV
+    for cut in vf.cut_V
+        @objective(model, Min, cut.shift[end][1] + vf.theta_TV - cut.intercept - sum(a * vf.states_TV[i] for (i,a) in cut.coefficients))
+        JuMP.optimize!(model)
+        res = min(res, objective_value(model))
+    end
+    return res
+end
+
+function compute_lower_bound_rvsddp(
+    model::PolicyGraph{T}
+)  where {T}
+    period = length(model.nodes)
+    discount_factor = model.discount_factor
+    res = compute_V(model[1].value_function, model.initial_root_state)
+    deltas = [0.0 for node_index in 1:period]
+
+    for node_index in 1:period
+        deltas[node_index] = compute_approx_delta(model[node_index])
+    end
+
+    res+=sum(deltas[node_index]*discount_factor^(node_index-1) for node_index in 1:period)/(1-discount_factor^period)
     return res
 end
 

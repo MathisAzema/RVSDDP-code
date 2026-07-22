@@ -1,0 +1,21 @@
+\begin{table}[ht]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\caption{Comparison of methods for $\beta=0.8$. Costs are reported as mean $\pm$ standard deviation. A/T denotes the number of active cuts over total cuts (on average per stage).}
+\label{tab:comparison_beta_08}
+\begin{tabular}{lcc|cc|cc}
+\toprule
+& \multicolumn{2}{c|}{600 s} & \multicolumn{2}{c|}{3600 s} & \multicolumn{2}{c}{36000 s} \\
+\cmidrule(r){2-3}
+\cmidrule(r){4-5}
+\cmidrule(l){6-7}
+Method & Cost & Cuts (A/T) & Cost & Cuts (A/T) & Cost & Cuts (A/T) \\
+\midrule
+Periodic SDDP & \makecell[c]{$61.5 \pm 0.3$ \\{\scriptsize (60.6)}} & 349 / 1123 & \makecell[c]{$61.3 \pm 0.3$ \\{\scriptsize (61.1)}} & 909 / 3179 & \makecell[c]{$61.3 \pm 0.3$ \\{\scriptsize (61.4)}} & 2502 / 9436 \\
+Cyclic SDDP & \makecell[c]{$61.8 \pm 0.3$ \\{\scriptsize (59.6)}} & 366 / 1181 & \makecell[c]{$61.5 \pm 0.3$ \\{\scriptsize (60.6)}} & 962 / 3314 & \makecell[c]{$61.3 \pm 0.3$ \\{\scriptsize (61.0)}} & 2735 / 10032 \\
+RV-SDDP\_10 & $61.7 \pm 0.3$ & 376 / 1136 & $61.4 \pm 0.3$ & 1000 / 3194 & $61.3 \pm 0.3$ & 2788 / 9262 \\
+RV-SDDP & $62.2 \pm 0.3$ & 249 / 840 & $61.6 \pm 0.3$ & 700 / 2502 & $61.4 \pm 0.3$ & 2240 / 8058 \\
+\bottomrule
+\end{tabular}
+\end{table}
