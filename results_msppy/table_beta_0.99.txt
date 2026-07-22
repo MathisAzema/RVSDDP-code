@@ -12,12 +12,12 @@
 \cmidrule(l){6-7}
 Method & Cost & Cuts (A/T) & Cost & Cuts (A/T) & Cost & Cuts (A/T) \\
 \midrule
-Periodic RV-SDDP & $2816 \pm 8$ & 139 / 824 & $2795 \pm 7$ & 351 / 2483 & $2785 \pm 7$ & 999 / 8312 \\
-Periodic SDDP & \makecell[c]{$2850 \pm 8$ \\{\scriptsize (2649)}} & 54 / 1221 & \makecell[c]{$2810 \pm 7$ \\{\scriptsize (2719)}} & 119 / 3520 & \makecell[c]{$2791 \pm 7$ \\{\scriptsize (2758)}} & 309 / 11425 \\
-Cyclic SDDP & \makecell[c]{$2890 \pm 8$ \\{\scriptsize (2588)}} & 69 / 1399 & \makecell[c]{$2822 \pm 7$ \\{\scriptsize (2699)}} & 144 / 4004 & \makecell[c]{$2793 \pm 7$ \\{\scriptsize (2754)}} & 340 / 12765 \\
-RV-SDDP\_10 & $2821 \pm 8$ & 198 / 1276 & $2799 \pm 7$ & 451 / 3644 & $2785 \pm 7$ & 1248 / 11668 \\
-RV-SDDP & $2817 \pm 8$ & 168 / 883 & $2792 \pm 7$ & 429 / 2635 & $2784 \pm 7$ & 1172 / 8716 \\
-SDDP\_10 & \makecell[c]{$3085 \pm 9$ \\{\scriptsize (2404)}} & 85 / 1388 & \makecell[c]{$2863 \pm 8$ \\{\scriptsize (2640)}} & 180 / 4031 & \makecell[c]{$2801 \pm 7$ \\{\scriptsize (2735)}} & 352 / 12856 \\
+RV-SDDP & $ \bm{1012 \pm 3}$ & $\bm{168} / 883$ & $ \bm{1003 \pm 3}$ & $\bm{429} / 2635$ & $ \bm{1000 \pm 3}$ & $\bm{1172} / 8716$ \\
+Cyclic SDDP & \makecell[c]{$1038 \pm 3$ \\{\scriptsize (930)}} & $69 / 1399$ & \makecell[c]{$1014 \pm 3$ \\{\scriptsize (969)}} & $144 / 4004$ & \makecell[c]{$1003 \pm 3$ \\{\scriptsize (989)}} & $340 / 12765$ \\[1ex] \cdashlinelr{1-7} \noalign{\vskip 0.3ex}
+Periodic RV-SDDP & $ \bm{1011 \pm 3}$ & $\bm{139} / 824$ & $ \bm{1004 \pm 3}$ & $\bm{351} / 2483$ & $ \bm{1000 \pm 3}$ & $\bm{999} / 8312$ \\
+Periodic SDDP & \makecell[c]{$1024 \pm 3$ \\{\scriptsize (951)}} & $54 / 1221$ & \makecell[c]{$1009 \pm 3$ \\{\scriptsize (976)}} & $119 / 3520$ & \makecell[c]{$1002 \pm 3$ \\{\scriptsize (991)}} & $309 / 11425$ \\[1ex] \cdashlinelr{1-7} \noalign{\vskip 0.3ex}
+RV-SDDP\_10 & $ \bm{1013 \pm 3}$ & $\bm{198} / 1276$ & $ \bm{1005 \pm 3}$ & $\bm{451} / 3644$ & $ \bm{1000 \pm 3}$ & $\bm{1248} / 11668$ \\
+Cyclic SDDP\_10 & \makecell[c]{$1108 \pm 3$ \\{\scriptsize (863)}} & $85 / 1388$ & \makecell[c]{$1028 \pm 3$ \\{\scriptsize (948)}} & $180 / 4031$ & \makecell[c]{$1006 \pm 3$ \\{\scriptsize (982)}} & $352 / 12856$ \\
 \bottomrule
 \end{tabular}
 \end{table}
