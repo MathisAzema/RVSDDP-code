@@ -318,3 +318,46 @@ function run_active(seed_list, parallel, time_max_list, shift_function_list, dis
     end
     return 
 end
+
+@everywhere function X_sharp_job(folder, time_limit, N, discount_factor)
+
+    TimeHorizon = 12*Int(ceil(log(0.001)/(12*log(discount_factor))))
+
+    model = RVSDDP.PolicyGraph(
+        msppy_hydro_thermal_builder,
+        graph;
+        sense = :Min,
+        lower_bound = 0.0,
+        optimizer = optimizer,
+        discount_factor=discount_factor,
+    )
+
+    RVSDDP._add_cuts(model, time_limit, folder);
+
+    Random.seed!(12345)
+
+    simulations= RVSDDP.simulate(
+            model,
+            N;
+            sampling_scheme = RVSDDP.InSampleMonteCarlo(max_depth=TimeHorizon),
+        )
+
+    oos_points = [simulations[k][t][:state] for k in 1:N for t in 1:TimeHorizon]
+
+    folder_res = "$(folder)/Xsharp"
+    if !isdir(folder_res)
+        mkdir(folder_res)
+    end
+
+    CSV.write("$(folder_res)/points_$(time_limit)_$(TimeHorizon)_$N.csv", DataFrame(iteration=1:N, oos_points=oos_points))
+
+end
+
+function run_X_sharp(seed_list, parallel, time_max, shift_function_list, discount_factor_list, refine_mode_list, N_list)
+    combos = [("results_msppy/$(shift_function)_$(refine_mode)_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_$(time_max)", time_max, N, discount_factor) for seed in seed_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list for N in N_list]
+
+    results = pmap(combos) do (folder, time_limit, N, discount_factor)
+        X_sharp_job(folder, time_limit, N, discount_factor)
+    end
+    return 
+end
