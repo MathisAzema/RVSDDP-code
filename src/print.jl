@@ -103,7 +103,6 @@ function print_problem_statistics(
     io::IO,
     model::PolicyGraph,
     existing_cuts::Bool,
-    parallel_scheme,
     risk_measure,
     sampling_scheme,
 )
@@ -128,7 +127,6 @@ function print_problem_statistics(
     println(io, "  scenarios       : ", paths)
     println(io, "  existing cuts   : ", existing_cuts)
     println(io, "options")
-    println(io, "  solver          : ", parallel_scheme)
     println(io, "  risk measure    : ", risk_measure)
     println(io, "  sampling scheme : ", typeof(sampling_scheme))
     println(io, "subproblem structure")

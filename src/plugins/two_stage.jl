@@ -59,18 +59,7 @@ function add_next_node_to_scenario_tree(
     node::Node{T},
     check_time_limit::Function,
 ) where {T}
-    if node.objective_state !== nothing
-        throw_detequiv_error("Objective states detected!")
-    elseif node.belief_state !== nothing
-        throw_detequiv_error("Belief states detected!")
-    elseif length(node.bellman_function.global_theta.cuts) > 0
-        throw_detequiv_error(
-            "Model has been used for training. Can only form deterministic " *
-            "equivalent on a fresh model.",
-        )
-    else
-        check_time_limit()
-    end
+    check_time_limit()
     for noise in node.noise_terms
         scenario_node = ScenarioTreeNode(
             node,

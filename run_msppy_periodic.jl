@@ -256,7 +256,7 @@ end
         discount_factor=discount_factor,
     )
 
-    RVSDDP._add_cuts(model, time_limit, folder);
+    RVSDDP._add_cuts_time(model, time_limit, folder);
 
     Random.seed!(12345)
 
@@ -304,7 +304,7 @@ end
             discount_factor=discount_factor,
         )
 
-        RVSDDP._add_cuts(model, time_limit, folder);
+        RVSDDP._add_cuts_time(model, time_limit, folder);
 
         active_cuts = Int.(round.(RVSDDP.count_all_active_cuts(model, 1e-4)))
 

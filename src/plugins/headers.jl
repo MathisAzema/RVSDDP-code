@@ -176,38 +176,6 @@ end
 
 # ============================= parallel schemes ============================= #
 
-"""
-    AbstractParallelScheme
-
-Abstract type for different parallelism schemes.
-"""
-abstract type AbstractParallelScheme end
-
-"""
-    master_loop(
-        ::AbstractParallelScheme,
-        model::PolicyGraph{T},
-        options::Options,
-    )::Symbol where {T}
-
-The solve loop of the RVSDDP algorithm. Returns a symbol corresponding to the
-termination status.
-"""
-function master_loop end
-
-"""
-    _simulate(
-        model::PolicyGraph,
-        ::AbstractParallelScheme,
-        number_replications::Int,
-        variables::Vector{Symbol};
-        kwargs...,
-    )
-
-Simulate the policy using the parallel scheme.
-"""
-function _simulate end
-
 # ============================= forward pass ============================= #
 
 """
@@ -225,8 +193,6 @@ Return a forward pass as a named tuple with the following fields:
     (
         ;scenario_path,
         sampled_states,
-        objective_states,
-        belief_states,
         cumulative_value,
     )
 

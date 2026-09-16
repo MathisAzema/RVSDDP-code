@@ -10,8 +10,6 @@ struct Graph{T}
     # probabilities.
     nodes::Dict{T,Vector{Tuple{T,Float64}}}
     # A partition of the nodes into ambiguity sets.
-    belief_partition::Vector{Vector{T}}
-    belief_lipschitz::Vector{Vector{Float64}}
 end
 
 """
@@ -51,8 +49,6 @@ function Graph(root_node::T) where {T}
     return Graph{T}(
         root_node,
         Dict{T,Vector{Tuple{T,Float64}}}(root_node => Tuple{T,Float64}[]),
-        Vector{T}[],
-        Vector{Float64}[],
     )
 end
 
@@ -93,12 +89,6 @@ function Base.show(io::IO, graph::Graph)
     if !has_arc
         print(io, "\n {}")
     end
-    if length(graph.belief_partition) > 0
-        print(io, "\nPartitions")
-        for element in graph.belief_partition
-            print(io, "\n {", join(string.(sort_nodes(element)), ", "), "}")
-        end
-    end
     return
 end
 
@@ -113,22 +103,6 @@ function _validate_graph(graph::Graph)
                     "$(probability), but this must be in [0.0, 1.0]",
                 )
             end
-        end
-    end
-    if length(graph.belief_partition) > 0
-        # The -1 accounts for the root node, which shouldn't be in the
-        # partition.
-        if graph.root_node in union(graph.belief_partition...)
-            error(
-                "Belief partition $(graph.belief_partition) cannot contain " *
-                "the root node $(graph.root_node).",
-            )
-        end
-        if length(graph.nodes) - 1 != length(union(graph.belief_partition...))
-            error(
-                "Belief partition $(graph.belief_partition) does not form a" *
-                " valid partition of the nodes in the graph.",
-            )
         end
     end
     return
@@ -181,12 +155,6 @@ function add_node(graph::Graph{T}, node) where {T}
     return error("Unable to add node $(node). Nodes must be of type $(T).")
 end
 
-function _add_node_if_missing(graph::Graph{T}, node::T) where {T}
-    if haskey(graph.nodes, node) || node == graph.root_node
-        return
-    end
-    return add_node(graph, node)
-end
 
 """
     add_edge(graph::Graph{T}, edge::Pair{T, T}, probability::Float64) where {T}
@@ -245,19 +213,6 @@ function add_edge(
     return
 end
 
-function _add_to_or_create_edge(
-    graph::Graph{T},
-    edge::Pair{T,T},
-    probability::Float64,
-) where {T}
-    for (i, (child, p)) in enumerate(graph.nodes[edge[1]])
-        if child == edge[2]
-            graph.nodes[edge[1]][i] = (edge[2], p + probability)
-            return
-        end
-    end
-    return add_edge(graph, edge, probability)
-end
 
 function Graph(
     root_node::T,
@@ -422,13 +377,6 @@ mutable struct Node{T}
     stage_objective_set::Bool
     # Bellman function
     bellman_function::Any  # TODO(odow): make this a concrete type?
-    # Objective-state and belief-state interpolation are unused features of
-    # upstream SDDP.jl; these fields are always `nothing`.
-    objective_state::Nothing
-    belief_state::Nothing
-    # An over-loadable hook for the JuMP.optimize! function.
-    pre_optimize_hook::Union{Nothing,Function}
-    post_optimize_hook::Union{Nothing,Function}
     # Approach for handling discrete variables.
     has_integrality::Bool
     # The user's optimizer. We use this in asynchronous mode.
@@ -460,15 +408,7 @@ function Base.show(io::IO, node::Node)
     return
 end
 
-function pre_optimize_hook(f::Function, node::Node)
-    node.pre_optimize_hook = f
-    return
-end
 
-function post_optimize_hook(f::Function, node::Node)
-    node.post_optimize_hook = f
-    return
-end
 
 struct Log
     iteration::Int
@@ -499,8 +439,6 @@ mutable struct PolicyGraph{T}
     initial_root_state::Dict{Symbol,Float64}
     # All nodes in the graph.
     nodes::Dict{T,Node{T}}
-    # Belief partition.
-    belief_partition::Vector{Set{T}}
     # Storage for the most recent training results.
     most_recent_training_results::Union{Nothing,TrainingResults}
     # An extension dictionary. This is a useful place for packages that extend
@@ -524,7 +462,6 @@ mutable struct PolicyGraph{T}
             Noise{T}[],
             Dict{Symbol,Float64}(),
             Dict{T,Node{T}}(),
-            Set{T}[],
             nothing,
             Dict{Symbol,Any}(),
             TimerOutputs.TimerOutput(),
@@ -697,13 +634,6 @@ function PolicyGraph(
             # use information about the children and number of
             # stagewise-independent noise realizations.
             nothing,
-            # Likewise for the objective states.
-            nothing,
-            # And for belief states.
-            nothing,
-            # The optimize hook defaults to nothing.
-            nothing,
-            nothing,
             false,
             direct_mode ? nothing : optimizer,
             # The extension dictionary.
@@ -861,11 +791,7 @@ function _build_replica(
         Dict{Symbol,State{JuMP.VariableRef}}(),
         0.0,
         false,
-        nothing,
-        nothing,
-        nothing,
-        nothing,
-        nothing,
+        nothing,   # bellman_function, filled in below
         false,
         factory.direct_mode ? nothing : factory.optimizer,
         Dict{Symbol,Any}(),
@@ -890,9 +816,6 @@ function _build_replica(
     end
     replica.bellman_function =
         initialize_bellman_function(factory.bellman_function, model, replica)
-    replica.bellman_function.cut_type = node.bellman_function.cut_type
-    replica.bellman_function.global_theta.deletion_minimum =
-        node.bellman_function.global_theta.deletion_minimum
     # `initialize_bellman_function` also records, in the node's own value
     # function, the initial bound `θ >= lower_bound` it puts in the subproblem.
     # `update_shift` lowers that bound like any other cut, so the replica's copy
@@ -1107,26 +1030,4 @@ macro stageobjective(subproblem, expr)
     end
 end
 
-# Internal function: calculate <y, μ>.
-function get_objective_state_component(node::Node)
-    objective_state_component = JuMP.AffExpr(0.0)
-    objective_state = node.objective_state
-    if objective_state !== nothing
-        for (y, μ) in zip(objective_state.state, objective_state.μ)
-            JuMP.add_to_expression!(objective_state_component, y, μ)
-        end
-    end
-    return objective_state_component
-end
 
-# Internal function: calculate <b, μ>.
-function get_belief_state_component(node::Node)
-    belief_component = JuMP.AffExpr(0.0)
-    if node.belief_state !== nothing
-        belief = node.belief_state
-        for (key, μ) in belief.μ
-            JuMP.add_to_expression!(belief_component, belief.belief[key], μ)
-        end
-    end
-    return belief_component
-end

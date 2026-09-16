@@ -31,18 +31,6 @@ struct DefaultForwardPass <: AbstractForwardPass
     end
 end
 
-# mutable struct Trajectory{T}
-#     scenario_path::Vector{Tuple{T,NoiseType}},
-#     sampled_states::Vector{Dict{Symbol,Float64}},
-#     objective_states::Vector{Tuple{}},
-#     belief_states::Vector{Tuple{Int,Dict{T,Float64}}}
-#     cumulative_value::Float64
-# end
-# scenario_path::Vector{Tuple{Int64, Float64}}
-# sampled_states::Vector{Dict{Symbol, Float64}}
-# objective_states::Vector{Tuple{}}
-# belief_states::Vector{Tuple{Int64, Dict{Int64, Float64}}}
-
 function forward_pass(
     model::PolicyGraph{T},
     options::Options,
@@ -88,30 +76,15 @@ function _forward_trajectory(
     end
     # Storage for the list of outgoing states that we visit on the forward pass.
     sampled_states = Dict{Symbol,Float64}[]
-    # Storage for the belief states: partition index and the belief dictionary.
-    belief_states = Tuple{Int,Dict{T,Float64}}[]
     # Our initial incoming state.
     incoming_state_value = copy(options.initial_state)
     # A cumulator for the stage-objectives.
     cumulative_value = 0.0
-    # Objective state interpolation.
-    objective_state_vector, N =
-        initialize_objective_state(_node(model, scenario_path[1][1], replica))
-    objective_states = NTuple{N,Float64}[]
     # Iterate down the scenario.
     for (depth, (node_index, noise)) in enumerate(scenario_path)
         node = _node(model, node_index, replica)
         lock(node.lock)
         try
-            # Objective state interpolation.
-            objective_state_vector = update_objective_state(
-                node.objective_state,
-                objective_state_vector,
-                noise,
-            )
-            if objective_state_vector !== nothing
-                push!(objective_states, objective_state_vector)
-            end
             # ===== Begin: starting state for infinite horizon =====
             starting_states = options.starting_states[node_index]
             if length(starting_states) > 0
@@ -168,9 +141,8 @@ function _forward_trajectory(
     if terminated_due_to_cycle
         # We terminated due to a cycle. Here is the list of possible
         # starting states for that node. Lock the *master* node because
-        # `starting_states` is shared across the trajectories of the batch
-        # (which each hold their own replica's lock) and, under
-        # `parallel_scheme = Threaded()`, across full iterations too.
+        # `starting_states` is shared across the trajectories of the batch,
+        # which each hold their own replica's lock.
         final_node_object = model[final_node[1]]
         lock(final_node_object.lock)
         try
@@ -196,8 +168,6 @@ function _forward_trajectory(
     return Trajectory{T}(
         scenario_path,
         sampled_states,
-        objective_states,
-        belief_states,
         cumulative_value,
     )
 end

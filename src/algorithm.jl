@@ -257,12 +257,6 @@ end
 # Internal function: set the objective of node to the stage objective, plus the
 # cost/value-to-go term.
 function set_objective(node::Node{T}) where {T}
-    objective_state_component = get_objective_state_component(node)
-    belief_state_component = get_belief_state_component(node)
-    if objective_state_component != JuMP.AffExpr(0.0) ||
-       belief_state_component != JuMP.AffExpr(0.0)
-        node.stage_objective_set = false
-    end
     if !node.stage_objective_set
         JuMP.set_objective(
             node.subproblem,
@@ -270,8 +264,6 @@ function set_objective(node::Node{T}) where {T}
             @expression(
                 node.subproblem,
                 node.stage_objective +
-                objective_state_component +
-                belief_state_component +
                 node.discount_factor*bellman_term(node.bellman_function)
             )
         )
@@ -288,9 +280,6 @@ _value(x) = JuMP.value(x)
 stage_objective_value(::Node, x::Union{GenericVariableRef,Real}) = _value(x)
 
 function stage_objective_value(node::Node, stage_objective)
-    if node.objective_state !== nothing || node.belief_state !== nothing
-        return _value(stage_objective)
-    end
     theta = bellman_term(node.bellman_function)
     return JuMP.objective_value(node.subproblem) - node.discount_factor*JuMP.value(theta)
 end
@@ -425,13 +414,8 @@ function attempt_numerical_recovery(
     callback(model, node; require_dual)
     missing_dual_solution = require_dual && !_has_dual_solution(node)
     if !_has_primal_solution(node) || missing_dual_solution
-        # We use the `node.index` in the filename because two threads could both
-        # try to write the cuts to file at the same time. If, after writing this
-        # file, a second thread finds an infeasibility of the same node, it
-        # doesn't matter if we over-write this file.
-        filename = "model_infeasible_node_$(node.index).cuts.json"
-        @info "Writing cuts to the file `$filename`"
-        write_cuts_to_file(model, filename)
+        # We use the `node.index` in the filename because two threads could
+        # both hit an infeasibility at the same time.
         write_subproblem_to_file(
             node,
             "subproblem_$(node.index).mof.json";
@@ -570,9 +554,6 @@ function solve_subproblem(
     @_timeit_threadsafe model.timer_output "get_dual_solution" begin
         objective, dual_values = get_dual_solution(node, duality_handler)
     end
-    if node.post_optimize_hook !== nothing
-        node.post_optimize_hook(pre_optimize_ret)
-    end
     return (
         state = state,
         duals = dual_values,
@@ -581,36 +562,8 @@ function solve_subproblem(
     )
 end
 
-# Internal function to get the objective state at the root node.
-function initialize_objective_state(first_node::Node)
-    objective_state = first_node.objective_state
-    if objective_state !== nothing
-        initial_objective_state = objective_state.initial_value
-        return initial_objective_state, length(initial_objective_state)
-    else
-        return nothing, 0
-    end
-end
 
-# Internal function: update the objective state given incoming `current_state`
-# and `noise`.
-update_objective_state(::Nothing, ::Any, ::Any) = nothing
 
-function update_objective_state(obj_state, current_state, noise)
-    if length(current_state) == 1
-        obj_state.state = (obj_state.update(current_state[1], noise),)
-    else
-        obj_state.state = obj_state.update(current_state, noise)
-    end
-    return obj_state.state
-end
-
-# Internal function: calculate the initial belief state.
-function initialize_belief(model::PolicyGraph{T}) where {T}
-    current_belief = Dict{T,Float64}(keys(model.nodes) .=> 0.0)
-    current_belief[model.root_node] = 1.0
-    return current_belief
-end
 
 # Internal function: calculate the minimum distance between the state `state`
 # and the list of states in `starting_states` using the distance measure `norm`.
@@ -641,8 +594,6 @@ end
 mutable struct Trajectory{T}
     scenario_path::Vector{Tuple{T, Any}}
     sampled_states::Vector{Dict{Symbol,Float64}}
-    objective_states::Vector{Tuple{}}
-    belief_states::Vector{Tuple{Int,Dict{T,Float64}}}
     cumulative_value::Float64
 end
 
@@ -678,7 +629,6 @@ function _refine_at_initial_point(
             model,
             node,
             items,
-            1.0,
             outgoing_state,
             options.backward_sampling_scheme,
             options.duality_handler,
@@ -713,7 +663,6 @@ function _refine_at_initial_point(
             model,
             node,
             items,
-            1.0,
             incoming_state,
             options.backward_sampling_scheme,
             options.duality_handler,
@@ -740,7 +689,7 @@ function _refine_at_initial_point(
 
         iteration = length(options.log)+1
 
-        cut = Cut(iteration, time() - options.start, θᵏ, πᵏ, nothing, nothing, 1, nothing, incoming_state)
+        cut = Cut(iteration, time() - options.start, θᵏ, πᵏ, incoming_state)
 
         _update_value_function(node, cut, shift, nothing)
         _update_delta(node, incoming_state, items.probability, items.objectives)
@@ -789,7 +738,6 @@ function backward_pass(
                     model,
                     node,
                     items_traj[index_traj],
-                    1.0,
                     outgoing_states[index_traj],
                     options.backward_sampling_scheme,
                     options.duality_handler,
@@ -847,14 +795,12 @@ struct BackwardPassItems{T,U}
     nodes::Vector{T}
     probability::Vector{Float64}
     objectives::Vector{Float64}
-    belief::Vector{Float64}
     function BackwardPassItems(T, U)
         return new{T,U}(
             Dict{Tuple{T,Any},Int}(),
             Dict{Symbol,Float64}[],
             U[],
             T[],
-            Float64[],
             Float64[],
             Float64[],
         )
@@ -865,7 +811,6 @@ function solve_one_children(
     model::PolicyGraph{T},
     node::Node{T},
     items::BackwardPassItems,
-    belief::Float64,
     incoming_state::Dict{Symbol,Float64},
     backward_sampling_scheme::AbstractBackwardSamplingScheme,
     duality_handler::Union{Nothing,AbstractDualityHandler},
@@ -892,7 +837,6 @@ function solve_one_children(
                 push!(items.nodes, node.index)
                 push!(items.probability, items.probability[sol_index])
                 push!(items.objectives, items.objectives[sol_index])
-                push!(items.belief, belief)
             else
                 @_timeit_threadsafe model.timer_output "solve_subproblem" begin
                     subproblem_results = solve_subproblem(
@@ -911,7 +855,6 @@ function solve_one_children(
                     noise.probability,
                 )
                 push!(items.objectives, subproblem_results.objective)
-                push!(items.belief, belief)
                 items.cached_solutions[(node.index, noise.term)] =
                     length(items.duals)
             end
@@ -926,7 +869,7 @@ function solve_one_children(
 end
 
 """
-    solve_all_children(model, node, items, belief, outgoing_state, ...; replica)
+    solve_all_children(model, node, items, outgoing_state, ...; replica)
 
 Solve every child of `node` at `outgoing_state` and accumulate the results in
 `items`.
@@ -939,7 +882,6 @@ function solve_all_children(
     model::PolicyGraph{T},
     node::Node{T},
     items::BackwardPassItems,
-    belief::Float64,
     outgoing_state::Dict{Symbol,Float64},
     backward_sampling_scheme::AbstractBackwardSamplingScheme,
     duality_handler::Union{Nothing,AbstractDualityHandler},
@@ -947,20 +889,11 @@ function solve_all_children(
     replica::Int = 1,
 ) where {T}
     for child in node.children
-        # We _do_ want to solve zero probability nodes, because they might allow
-        # us to cut share between similar nodes of a Markovian policy graph. If
-        # the user put them in, assume that they're there for a reason.
-        #
-        # If we have a belief state, then skip the node. I don't really know
-        # why, but tests failed when I tried to remove this.
-        #
-        # See RVSDDP.jl#796 and RVSDDP.jl#797 for more discussion.
         child_node = _node(model, child.term, replica)
         solve_one_children(
             model,
             child_node,
             items,
-            belief,
             outgoing_state,
             backward_sampling_scheme,
             duality_handler,
@@ -1107,6 +1040,56 @@ function termination_status(model::PolicyGraph)
     return model.most_recent_training_results.status
 end
 
+# Internal: run `number_replications` independent simulations of the policy.
+function _simulate(
+    model::PolicyGraph,
+    number_replications::Int,
+    variables::Vector{Symbol};
+    kwargs...,
+)
+    _initialize_solver(model; throw_error = false)
+    return map(_ -> _simulate(model, variables; kwargs...), 1:number_replications)
+end
+
+function _should_log(options)
+    return options.print_level > 0 && options.log_frequency(options.log)
+end
+
+function log_iteration(options; force_if_needed::Bool = false)
+    force_if_needed &= options.last_log_iteration[] != length(options.log)
+    if force_if_needed || _should_log(options)
+        print_helper(print_iteration, options.log_file_handle, options.log[end])
+        flush(options.log_file_handle)
+        options.last_log_iteration[] = length(options.log)
+    end
+    return
+end
+
+# Internal: run iterations until a stopping rule fires.
+#
+# The batch of an iteration is already spread over the available cores (see
+# `_parallel_foreach`), and its cuts mutate the shared model, so iterations
+# themselves are run one after another.
+function _training_loop(model::PolicyGraph{T}, options::Options) where {T}
+    status = nothing
+    while status === nothing
+        # Disable CTRL+C so that InterruptExceptions can be thrown only between
+        # each iteration. Note that if the user presses CTRL+C during an
+        # iteration, then this will be cached and re-thrown as disable_sigint
+        # exits.
+        status = disable_sigint() do
+            result = iteration(model, options)
+            options.post_iteration_callback(result)
+            log_iteration(options)
+            if result.has_converged
+                return result.status
+            end
+            return nothing
+        end
+    end
+    return status
+end
+
 """
     RVSDDP.train(model::PolicyGraph; kwargs...)
 
@@ -1144,12 +1127,6 @@ Train the policy for `model`.
     same children, it can cheaply add a cut discovered at one to the other. In
     almost all cases this should be set to `true`.
 
- - `cut_deletion_minimum::Int`: the minimum number of cuts to cache before
-    deleting  cuts from the subproblem. The impact on performance is solver
-    specific; however, smaller values result in smaller subproblems (and
-    therefore quicker solves), at the expense of more time spent performing cut
-    selection.
-
  - `risk_measure`: the risk measure to use at each node. Defaults to
    [`Expectation`](@ref).
 
@@ -1164,12 +1141,6 @@ Train the policy for `model`.
 
  - `backward_sampling_scheme`: a backward pass sampling scheme to use on the
     backward pass of the algorithm. Defaults to `CompleteSampler`.
-
- - `cut_type`: choose between `RVSDDP.SINGLE_CUT` and `RVSDDP.MULTI_CUT` versions of
-   RVSDDP.
-
- - `parallel_scheme::AbstractParallelScheme`: specify a scheme for solving in
-   parallel. Defaults to `Serial()`.
 
  - `forward_pass::AbstractForwardPass`: specify a scheme to use for the forward
    passes.
@@ -1205,12 +1176,9 @@ function train(
     risk_measure = RVSDDP.Expectation(),
     root_node_risk_measure::AbstractRiskMeasure = Expectation(),
     sampling_scheme = RVSDDP.InSampleMonteCarlo(),
-    cut_type = RVSDDP.SINGLE_CUT,
     cycle_discretization_delta::Float64 = 0.0,
     refine_at_similar_nodes::Bool = true,
-    cut_deletion_minimum::Int = 1,
     backward_sampling_scheme::AbstractBackwardSamplingScheme = RVSDDP.CompleteSampler(),
-    parallel_scheme::AbstractParallelScheme = Serial(),
     forward_pass::AbstractForwardPass = DefaultForwardPass(),
     add_to_existing_cuts::Bool = false,
     duality_handler::AbstractDualityHandler = RVSDDP.ContinuousConicDuality(),
@@ -1286,7 +1254,6 @@ function train(
             log_file_handle,
             model,
             model.most_recent_training_results !== nothing,
-            parallel_scheme,
             risk_measure,
             sampling_scheme,
         )
@@ -1327,32 +1294,12 @@ function train(
             "`time_limit`, `cut_limit`, or `stopping_rules` to `train`.",
         )
     end
-    # Update the nodes with the selected cut type (SINGLE_CUT or MULTI_CUT)
-    # and the cut deletion minimum.
-    if cut_deletion_minimum < 0
-        cut_deletion_minimum = typemax(Int)
-    end
-    for (_, node) in model.nodes
-        node.bellman_function.cut_type = cut_type
-        node.bellman_function.global_theta.deletion_minimum =
-            cut_deletion_minimum
-        for oracle in node.bellman_function.local_thetas
-            oracle.deletion_minimum = cut_deletion_minimum
-        end
-    end
     # `parallel` trajectories are simulated, and their children solved, at the
     # same time. That needs `parallel - 1` extra copies of every subproblem, so
     # that no two of them share a JuMP model; build any that are missing (this
     # is a no-op when the graph was created with `max_parallel >= parallel`).
     if parallel > 1
         _build_replicas!(model, parallel)
-        for (_, node) in model.nodes
-            for replica in node.replicas
-                replica.bellman_function.cut_type = cut_type
-                replica.bellman_function.global_theta.deletion_minimum =
-                    cut_deletion_minimum
-            end
-        end
         if Threads.nthreads() < parallel
             @warn(
                 "`parallel = $(parallel)` but Julia was started with only " *
@@ -1392,7 +1339,7 @@ function train(
     )
     status = :not_solved
     try
-        status = master_loop(parallel_scheme, model, options)
+        status = _training_loop(model, options)
     catch ex
         # Unwrap exceptions from tasks. If there are multiple exceptions,
         # rethrow only the last one.
@@ -1404,7 +1351,6 @@ function train(
         end
         if ex isa InterruptException
             status = :interrupted
-            interrupt(parallel_scheme)
         else
             close(log_file_handle)
             throw(ex)
@@ -1450,29 +1396,13 @@ function _simulate(
 
     # Storage for the simulation results.
     simulation = Dict{Symbol,Any}[]
-    current_belief = initialize_belief(model)
     # A cumulator for the stage-objectives.
     cumulative_value = 0.0
-
-    # Objective state interpolation.
-    objective_state_vector, N =
-        initialize_objective_state(model[scenario_path[1][1]])
-    objective_states = NTuple{N,Float64}[]
     length_scenario_path = length(scenario_path)
     for (depth, (node_index, noise)) in enumerate(scenario_path)
         node = model[node_index]
         lock(node.lock)
         try
-            # Objective state interpolation.
-            objective_state_vector = update_objective_state(
-                node.objective_state,
-                objective_state_vector,
-                noise,
-            )
-            if objective_state_vector !== nothing
-                push!(objective_states, objective_state_vector)
-            end
-            current_belief = Dict(node_index => 1.0)
             # Solve the subproblem.
             subproblem_results = solve_subproblem(
                 model,
@@ -1491,15 +1421,10 @@ function _simulate(
                 :bellman_term =>
                     subproblem_results.objective -
                     subproblem_results.stage_objective,
-                :objective_state => objective_state_vector,
                 :outgoing_state => subproblem_results.state,
-                :belief => copy(current_belief),
             )
             if depth == length_scenario_path && infinite
                 store[:cost_end_of_horizon] = compute_cost_end_of_horizon(model, length_scenario_path+1, subproblem_results.state)
-            end
-            if objective_state_vector !== nothing && N == 1
-                store[:objective_state] = store[:objective_state][1]
             end
             # Loop through the primal variable values that the user wants.
             for variable in variables
@@ -1554,7 +1479,6 @@ end
         custom_recorders = Dict{Symbol, Function}(),
         duality_handler::Union{Nothing,AbstractDualityHandler} = nothing,
         skip_undefined_variables::Bool = false,
-        parallel_scheme::AbstractParallelScheme = Serial(),
         incoming_state::Dict{String,Float64} = _initial_state(model),
      )::Vector{Vector{Dict{Symbol,Any}}}
 
@@ -1610,9 +1534,6 @@ useful to obtain the primal value of the state and control variables.
    thrown. To over-ride this (and return a `NaN` instead), pass
    `skip_undefined_variables = true`.
 
- - `parallel_scheme`: Use `parallel_scheme::[AbstractParallelScheme](@ref)` to
-   specify a scheme for simulating in parallel. Defaults to [`Serial`](@ref).
-
  - `initial_state`: Use `incoming_state` to pass an initial value of the state
    variable, if it differs from that at the root node. Each key should be the
    string name of the state variable.
@@ -1646,12 +1567,10 @@ function simulate(
     custom_recorders = Dict{Symbol,Function}(),
     duality_handler::Union{Nothing,AbstractDualityHandler} = nothing,
     skip_undefined_variables::Bool = false,
-    parallel_scheme::AbstractParallelScheme = Serial(),
     incoming_state::Dict{String,Float64} = _initial_state(model),
 )
     return _simulate(
         model,
-        parallel_scheme,
         number_replications,
         variables;
         infinite=infinite,
@@ -1663,64 +1582,3 @@ function simulate(
     )
 end
 
-"""
-    DecisionRule(model::PolicyGraph{T}; node::T)
-
-Create a decision rule for node `node` in `model`.
-
-## Example
-
-```julia
-rule = RVSDDP.DecisionRule(model; node = 1)
-```
-"""
-struct DecisionRule{T}
-    model::PolicyGraph{T}
-    node::Node{T}
-    function DecisionRule(model::PolicyGraph{T}; node::T) where {T}
-        return new{T}(model, model[node])
-    end
-end
-
-function Base.show(io::IO, pi::DecisionRule)
-    print(io, "A decision rule for node $(pi.node.index)")
-    return
-end
-
-"""
-    evaluate(
-        rule::DecisionRule;
-        incoming_state::Dict{Symbol,Float64},
-        noise = nothing,
-        controls_to_record = Symbol[],
-    )
-
-Evalute the decision rule `rule` at the point described by the `incoming_state`
-and `noise`.
-
-If the node is deterministic, omit the `noise` argument.
-
-Pass a list of symbols to `controls_to_record` to save the optimal primal
-solution corresponding to the names registered in the model.
-"""
-function evaluate(
-    rule::DecisionRule{T};
-    incoming_state::Dict{Symbol,Float64},
-    noise = nothing,
-    controls_to_record = Symbol[],
-) where {T}
-    ret = solve_subproblem(
-        rule.model,
-        rule.node,
-        incoming_state,
-        noise;
-        duality_handler = nothing,
-    )
-    return (
-        stage_objective = ret.stage_objective,
-        outgoing_state = ret.state,
-        controls = Dict(
-            c => value.(rule.node.subproblem[c]) for c in controls_to_record
-        ),
-    )
-end
