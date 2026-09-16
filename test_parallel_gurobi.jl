@@ -1,29 +1,45 @@
+# TEST/DIAGNOSTIC ONLY -- standalone terminal version of the Gurobi
+# thread-safety check (see notebook_msppy.ipynb cell 3 and the
+# TEST/DIAGNOSTIC ONLY comments in src/algorithm.jl,
+# src/plugins/bellman_functions.jl, src/plugins/forward_passes.jl and
+# src/user_interface.jl).
+#
+# Usage: start ONE persistent Julia REPL (not `julia script.jl`, which exits
+# after running once) with enough threads:
+#
+#     julia -t 10 --project=.
+#
+# then, inside that REPL:
+#
+#     julia> include("test_parallel_gurobi.jl")   # slow: imports + Gurobi env + runs once
+#     julia> run_diagnostic()                       # fast: re-run as many times as you like
+#     julia> run_diagnostic(n_trials = 20)          # or with different options
+#
+# `-t 10` is what actually gives this Julia process 10 threads; it must be
+# >= max_parallel/parallel used by run_diagnostic. There is no
+# Distributed/addprocs here on purpose, to avoid the "worker processes
+# default to 1 thread each" trap -- everything runs in this one process.
+
 import Pkg
-# Pkg.instantiate()
 Pkg.activate(".")
 
-using Distributed
+using RVSDDP
+using Random
+using Statistics
+using Gurobi
 
-Nbworkers = 15
-println(nworkers())
-if nworkers() >= Nbworkers+1
-    rmprocs(workers())
-    addprocs(Nbworkers)
-elseif nworkers() ==1
-    addprocs(Nbworkers - nworkers()+1)
-else
-    addprocs(Nbworkers - nworkers())
+const GRB_ENV = Gurobi.Env()
+optimizer = () -> Gurobi.Optimizer(GRB_ENV)
+
+println("Threads.nthreads() = ", Threads.nthreads())
+if Threads.nthreads() == 1
+    error("Started with only 1 thread. Re-run as `julia -t 10 --project=. test_parallel_gurobi.jl`.")
 end
 
-@everywhere import Pkg
-@everywhere Pkg.activate(".")
-@everywhere using Random
-@everywhere using RVSDDP
-@everywhere using Gurobi
-@everywhere const GRB_ENV = Gurobi.Env()
-@everywhere optimizer=() -> Gurobi.Optimizer(GRB_ENV)
+discount_factor = 0.99
+period = 12
 
-@everywhere function msppy_hydro_thermal_builder(sp::Model, node::Int, discount_factor::Float64)
+function msppy_hydro_thermal_builder(sp::Model, node::Int, discount_factor::Float64)
     thermal_ub = Array{Float64, 2}[
         [657 1350 36 250 250 28 529 44 255 235 386 386 145 226 131 87 204 923 923 400 100 200 169 386 28 200 272 30 168 440 400 258 258 258 64 340 1058 1058 10 197 175 206 54],
         [66 485 485 350 161 72 4 20 100 132 262 363 24 126 320 20 640],
@@ -131,233 +147,71 @@ end
     end
 end
 
-@everywhere graph=RVSDDP.InfiniteLinearGraph(12);
+graph=RVSDDP.InfiniteLinearGraph(12);
 
-@everywhere using CSV, DataFrames, JSON
+# ------------------------------------------------------------------
+# Diagnostic: train `n_trials` fresh models with `parallel = parallel`
+# (real replicas + Threads.@threads), and flag any run whose approx_value
+# is wildly off from the others -- that's what caught the HiGHS issue.
+# DO NOT trust a single run/trial: call `run_diagnostic()` several times.
+#
+# Everything above this point (imports, Gurobi env, builder, graph) only
+# needs to run once per session -- that's the slow part (precompilation,
+# JIT warmup). Once you've `include`d this file, just call
+# `run_diagnostic()` again from the same REPL as many times as you want;
+# it reuses everything already loaded and only pays the cost of training.
+# ------------------------------------------------------------------
 
-@everywhere function rvsddp_job(seed, parallel, time_max, shift_function, discount_factor, refine_mode)
-    model = RVSDDP.PolicyGraph(
-        msppy_hydro_thermal_builder,
-        graph;
-        sense = :Min,
-        lower_bound = 0.0,
-        optimizer = optimizer,
-        discount_factor=discount_factor,
-    )
-
-    Random.seed!(seed)
-    
-    RVSDDP.train(model; refine_mode=refine_mode, parallel=parallel, sampling_scheme=RVSDDP.InSampleMonteCarlo(max_depth=10000000, rollout_limit = i -> 12*i-1, parallel=parallel), time_limit = time_max, infinite = true, shift_function=shift_function); 
-
-    cuts_data = []
-    for (_, node) in model.nodes
-        for cut in node.value_function.cut_V
-            push!(cuts_data, Dict(
-                :node => node.index,
-                :iteration => cut.iteration,
-                :time => cut.time,
-                :intercept => cut.intercept,
-                :coefficients => JSON.json(cut.coefficients),
-                :shift => JSON.json(cut.shift),
-                :state => JSON.json(cut.state)
-            ))
-        end
-    end
-
-    # Créer une DataFrame
-    df_cuts = DataFrame(cuts_data)
-
-    folder1 = "results_msppy/$(shift_function)_$(refine_mode)_parallel_$(parallel)"
-    if !isdir(folder1)
-        mkdir(folder1)
-    end
-
-    folder2 = "$(folder1)/$(discount_factor)"
-    if !isdir(folder2)
-        mkdir(folder2)
-    end
-
-    folder3 = "$(folder1)/$(discount_factor)/seed_$(seed)_time_$(time_max)"
-    if !isdir(folder3)
-        mkdir(folder3)
-    end
-
-    # Sauvegarder en CSV
-    CSV.write("$(folder3)/cuts.csv", df_cuts)
-
-    delta_data = []
-    for (_, node) in model.nodes
-        for (iter,delta) in enumerate(node.delta)
-            push!(delta_data, Dict(
-                :node => node.index,
-                :iteration => iter,
-                :delta => delta,
-            ))
-        end
-    end
-
-    CSV.write("$(folder3)/deltas.csv", DataFrame(delta_data))
-
-    approx_value_data = []
-    for (iter,val) in enumerate(model.approx_value)
-        push!(approx_value_data, Dict(
-            :iteration => iter,
-            :approx_value => val,
-        ))
-    end
-
-    CSV.write("$(folder3)/approx_values.csv", DataFrame(approx_value_data))
-end
-
-function run_rvsddp_infinite(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, refine_mode_list)
-    for shift_function in shift_function_list
-        for refine_mode in refine_mode_list
-            folder1 = "results_msppy/$(shift_function)_$(refine_mode)_parallel_$(parallel)"
-            if !isdir(folder1)
-                mkdir(folder1)
-            end
-            for discount_factor in discount_factor_list
-                folder2 = "$(folder1)/$(discount_factor)"
-                if !isdir(folder2)
-                    mkdir(folder2)
-                end
-            end
-        end
-    end
-    combos = [(seed, parallel, time_max, shift_function, discount_factor, refine_mode) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list]
-
-    results = pmap(combos) do (seed, parallel, time_max, shift_function, discount_factor, refine_mode)
-        rvsddp_job(seed, parallel, time_max, shift_function, discount_factor, refine_mode)
-    end
-    return 
-end
-
-@everywhere function evaluate_job(folder, time_limit, N, discount_factor)
-
-    TimeHorizon = 12*Int(ceil(log(0.001)/(12*log(discount_factor))))
-
-    model = RVSDDP.PolicyGraph(
-        msppy_hydro_thermal_builder,
-        graph;
-        sense = :Min,
-        lower_bound = 0.0,
-        optimizer = optimizer,
-        discount_factor=discount_factor,
-    )
-
-    RVSDDP._add_cuts(model, time_limit, folder);
-
-    Random.seed!(12345)
-
-    simulations= RVSDDP.simulate(
-            model,
-            N;
-            sampling_scheme = RVSDDP.InSampleMonteCarlo(max_depth=TimeHorizon),
-        )
-    oos_horizon = [sum((discount_factor^(t-1))*simulations[k][t][:stage_objective] for t in 1:TimeHorizon) for k in 1:N]
-    oos_5 = [sum((discount_factor^(t-1))*simulations[k][t][:stage_objective] for t in 1:min(5*12,TimeHorizon)) for k in 1:N]
-    oos_10 = [sum((discount_factor^(t-1))*simulations[k][t][:stage_objective] for t in 1:min(10*12,TimeHorizon)) for k in 1:N]
-    oos_end_of_horizon = [simulations[k][TimeHorizon][:cost_end_of_horizon] for k in 1:N]
-
-    folder_res = "$(folder)/oos"
-    if !isdir(folder_res)
-        mkdir(folder_res)
-    end
-
-    CSV.write("$(folder_res)/oos_horizon_$(time_limit)_$(TimeHorizon)_$N.csv", DataFrame(iteration=1:N, oos_horizon=oos_horizon))
-    CSV.write("$(folder_res)/oos_end_of_horizon_$(time_limit)_$(TimeHorizon)_$N.csv", DataFrame(iteration=1:N, oos_end_of_horizon=oos_end_of_horizon))
-    CSV.write("$(folder_res)/oos_5_$(time_limit)_$(TimeHorizon)_$N.csv", DataFrame(iteration=1:N, oos_horizon=oos_5))
-    CSV.write("$(folder_res)/oos_10_$(time_limit)_$(TimeHorizon)_$N.csv", DataFrame(iteration=1:N, oos_horizon=oos_10))
-
-end
-
-function run_evaluate(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, refine_mode_list, time_list, N_list)
-    combos = [("results_msppy/$(shift_function)_$(refine_mode)_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)", time_limit, N, discount_factor) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list for time_limit in time_list for N in N_list]
-
-    results = pmap(combos) do (folder, time_limit, N, discount_factor)
-        evaluate_job(folder, time_limit, N, discount_factor)
-    end
-    return 
-end
-
-@everywhere function active_job(folder, time_list, discount_factor)
-
-    active_cuts_data = []
-    for time_limit in time_list
-        model = RVSDDP.PolicyGraph(
+function run_diagnostic(; n_trials::Int = 1, parallel::Int = 10, time_limit::Real = 5)
+    println("Threads.nthreads() = ", Threads.nthreads())
+    results = Float64[]
+    for trial in 1:n_trials
+        model_cyclic_sddp = RVSDDP.PolicyGraph(
             msppy_hydro_thermal_builder,
             graph;
             sense = :Min,
             lower_bound = 0.0,
             optimizer = optimizer,
-            discount_factor=discount_factor,
+            discount_factor = discount_factor,
+            max_parallel = parallel,
         )
 
-        RVSDDP._add_cuts(model, time_limit, folder);
+        Random.seed!(trial)
+        RVSDDP.train(
+            model_cyclic_sddp;
+            refine_mode = 0,
+            parallel = parallel,
+            sampling_scheme = RVSDDP.InSampleMonteCarlo(
+                max_depth = 30000,
+                rollout_limit = i -> period * i,
+                parallel = parallel,
+            ),
+            time_limit = time_limit,
+            infinite = true,
+            shift_function = RVSDDP.no_shift,
+        )
 
-        active_cuts = Int.(round.(RVSDDP.count_all_active_cuts(model, 1e-4)))
+        # V_0(x_0): the value function approximation at the initial state,
+        # i.e. exactly what RVSDDP.train already stores as model.approx_value
+        # after every backward pass.
+        v = model_cyclic_sddp.approx_value[end][2]
+        push!(results, v)
+        total_cuts = sum(length(node.value_function.cut_V) for node in values(model_cyclic_sddp.nodes))
+        println("trial $trial (seed=$trial): lower_bound = $v, total cuts = $total_cuts")
+    end
 
-        for t in 1:12
-            push!(active_cuts_data, Dict(
-                :time => time_limit,
-                :stage => t,
-                :num_active_cuts => active_cuts[t],
-            ))
+    med = Statistics.median(results)
+    anomaly = false
+    for (trial, v) in enumerate(results)
+        if v > 10 * med || v < med / 10
+            println("  <<<< ANOMALY at trial $trial: $v vs median $med")
+            anomaly = true
         end
     end
-
-    CSV.write("$(folder)/active_cuts.csv", DataFrame(active_cuts_data))
-
+    println(anomaly ? "NOT SAFE: at least one anomalous run." : "No anomaly this run -- call run_diagnostic() a few more times before concluding it's safe.")
+    return results
 end
 
-function run_active(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, refine_mode_list, time_list)
-    combos = [("results_msppy/$(shift_function)_$(refine_mode)_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)", time_list, discount_factor) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list]
-
-    results = pmap(combos) do (folder, iter, discount_factor)
-        active_job(folder, iter, discount_factor)
-    end
-    return 
-end
-
-@everywhere function X_sharp_job(folder, time_limit, N, discount_factor)
-
-    TimeHorizon = 12*Int(ceil(log(0.001)/(12*log(discount_factor))))
-
-    model = RVSDDP.PolicyGraph(
-        msppy_hydro_thermal_builder,
-        graph;
-        sense = :Min,
-        lower_bound = 0.0,
-        optimizer = optimizer,
-        discount_factor=discount_factor,
-    )
-
-    RVSDDP._add_cuts(model, time_limit, folder);
-
-    Random.seed!(12345)
-
-    simulations= RVSDDP.simulate(
-            model,
-            N;
-            sampling_scheme = RVSDDP.InSampleMonteCarlo(max_depth=TimeHorizon),
-        )
-
-    oos_points = [simulations[k][t][:state] for k in 1:N for t in 1:TimeHorizon]
-
-    folder_res = "$(folder)/Xsharp"
-    if !isdir(folder_res)
-        mkdir(folder_res)
-    end
-
-    CSV.write("$(folder_res)/points_$(time_limit)_$(TimeHorizon)_$N.csv", DataFrame(iteration=1:N, oos_points=oos_points))
-
-end
-
-function run_X_sharp(seed_list, parallel, time_max, shift_function_list, discount_factor_list, refine_mode_list, N_list)
-    combos = [("results_msppy/$(shift_function)_$(refine_mode)_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_$(time_max)", time_max, N, discount_factor) for seed in seed_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list for N in N_list]
-
-    results = pmap(combos) do (folder, time_limit, N, discount_factor)
-        X_sharp_job(folder, time_limit, N, discount_factor)
-    end
-    return
-end
+# Runs once when you `include` this file. After that, just call
+# `run_diagnostic()` again directly from the REPL -- no need to re-include.
+run_diagnostic()

@@ -54,8 +54,16 @@ function InSampleMonteCarlo(;
             "false when max_depth=0.",
         )
     end
-    new_rollout = let i = 0
-        () -> (i += 1; rollout_limit(div(i+parallel-1,parallel)))
+    # `i` is incremented from every trajectory of every batch, and since
+    # `options.parallel` trajectories are now solved concurrently across
+    # threads (see forward_passes.jl), this counter must be atomic: a plain
+    # `i += 1` would race and lose increments, breaking the grouping of
+    # `parallel` consecutive calls onto the same `rollout_limit` value.
+    new_rollout = let i = Threads.Atomic{Int}(0)
+        () -> begin
+            new_i = Threads.atomic_add!(i, 1) + 1
+            return rollout_limit(div(new_i + parallel - 1, parallel))
+        end
     end
     return InSampleMonteCarlo(
         max_depth,

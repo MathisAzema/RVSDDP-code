@@ -589,7 +589,7 @@ model = PolicyGraph(
 end
 ```
 """
-#Mathis
+
 function PolicyGraph(
     builder::Function,
     graph::Graph{T};
@@ -633,14 +633,14 @@ function PolicyGraph(
         end
         subproblem = construct_subproblem(optimizer, direct_mode)
         twostage=TwoStage(
-            construct_subproblem(optimizer, direct_mode), 
-            Dict{Symbol,VariableRef}(), 
+            construct_subproblem(optimizer, direct_mode),
+            Dict{Symbol,VariableRef}(),
             Dict{Symbol, Vector{VariableRef}}(),
             VariableRef[],
             Dict{Symbol, Float64}(),
             Dict{Symbol, Float64}()
         )
-        
+
         valuefunction = initialize_value_function(sense, optimizer)
         node = Node(
             node_index,
@@ -687,7 +687,7 @@ function PolicyGraph(
         node.has_integrality =
             (JuMP.VariableRef, MOI.Integer) in ctypes ||
             (JuMP.VariableRef, MOI.ZeroOne) in ctypes
-        
+
     end
     # Loop back through and add the arcs/children.
     for (node_index, children) in graph.nodes

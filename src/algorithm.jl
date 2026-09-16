@@ -743,18 +743,15 @@ function backward_pass(
         if index in index_to_refine
             items_traj = [BackwardPassItems(T, Noise) for _ in trajectory]
             outgoing_states = [traj.sampled_states[index] for traj in trajectory]
-            # Solve the (up to `options.parallel`) trajectories of this batch
-            # concurrently. Each trajectory writes only to its own
-            # `items_traj[index_traj]`; contention on the shared node
-            # subproblem(s) is serialized inside `solve_all_children` via
-            # `node.lock`.
-            Threads.@threads for index_traj in 1:length(trajectory)
+            for (index_traj,traj) in enumerate(trajectory)
+                outgoing_state = outgoing_states[index_traj]
+                items = items_traj[index_traj]
                 solve_all_children(
                     model,
                     node,
-                    items_traj[index_traj],
+                    items,
                     1.0,
-                    outgoing_states[index_traj],
+                    outgoing_state,
                     options.backward_sampling_scheme,
                     options.duality_handler,
                     options,
@@ -762,28 +759,21 @@ function backward_pass(
             end
 
             next_node = model[node.children[1].term]
-            # A single shift is computed for the whole batch, from the
-            # combined items of all trajectories.
             shift=options.shift_function(model, next_node, items_traj, outgoing_states)
             if index <= length(model.nodes)-1 || options.refine_mode == 1
                 outgoing_state = outgoing_states[1]
                 items = items_traj[1]
                 _update_delta(next_node, outgoing_state, items.probability, items.objectives)
             end
-            # Add the cuts for the batch concurrently. Each thread writes to
-            # its own slot of `new_cuts_batch`; `refine_bellman_function`
-            # itself is serialized per-node via `node.lock`, so the shared
-            # `node.bellman_function`/`node.value_function` are never mutated
-            # by two threads at once.
-            new_cuts_batch = Vector{Any}(undef, length(trajectory))
-            Threads.@threads for index_traj in 1:length(trajectory)
+            for (index_traj, traj) in enumerate(trajectory)
+                outgoing_state = outgoing_states[index_traj]
                 items = items_traj[index_traj]
-                new_cuts_batch[index_traj] = refine_bellman_function(
+                new_cuts = refine_bellman_function(
                     model,
                     node,
                     node.bellman_function,
                     options.risk_measures[node_index],
-                    outgoing_states[index_traj],
+                    outgoing_state,
                     items.duals,
                     items.supports,
                     items.probability,
@@ -792,8 +782,9 @@ function backward_pass(
                     length(options.log)+1,
                     time()-options.start,
                 )
+
+                push!(cuts[node_index], new_cuts)
             end
-            append!(cuts[node_index], new_cuts_batch)
         end
     end
     if 0 in index_to_refine

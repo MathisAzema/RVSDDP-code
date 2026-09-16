@@ -110,7 +110,7 @@ end
 
 #Mathis
 function _add_cut_constraint_to_model(
-    model::PolicyGraph{T}, 
+    model::PolicyGraph{T},
     node::Node{T}, 
     V::ConvexApproximation, 
     cut::Cut, 
@@ -138,7 +138,6 @@ function _add_cut_constraint_to_model(
     else
         @constraint(mod, expr <= cut.intercept)
     end
-
     #Get cst in node
     return
 end

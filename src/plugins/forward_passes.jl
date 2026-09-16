@@ -13,12 +13,22 @@ the last node (which forms the cycle) is omitted. This can be useful option to
 set when training, but it comes at the cost of not knowing which node formed the
 cycle (if there are multiple possibilities).
 
-The `options.parallel` trajectories of the batch are sampled using
-`Threads.@threads`, so they run concurrently across the Julia threads available
-to the process (start Julia with `julia -t N` or set `JULIA_NUM_THREADS=N` to
-get more than one). Access to each node's shared `subproblem` (and to the
-per-node `starting_states` list) is serialized through `node.lock`, so this is
-safe even though most nodes are visited by several trajectories.
+The `options.parallel` trajectories of the batch are sampled one after
+another (NOT with `Threads.@threads`). Two prototypes tried
+`Threads.@threads` here and in the backward pass, giving each trajectory its
+own independent per-node subproblem copy to solve concurrently (see git
+history / test_parallel_gurobi*.jl for the abandoned implementation). Both
+were reverted: even with every trajectory solving its own copy of the model
+(no shared state in this package's own bookkeeping), concurrently calling
+`JuMP.optimize!`/`@constraint`/`@expression` from multiple threads was found
+— empirically, across repeated trials, reproducibly with HiGHS and also
+with Gurobi — to intermittently (and sometimes deterministically within a
+run) produce results that violate basic validity (e.g. a computed lower
+bound exceeding the known optimum). The cause is thread-unsafety in JuMP,
+MOI, or the underlying solver, not in RVSDDP.jl itself, and it is not
+solver-specific. Genuine concurrency for this batch would need
+`Distributed` (separate worker processes, no shared memory) rather than
+`Threads`.
 """
 struct DefaultForwardPass <: AbstractForwardPass
     include_last_node::Bool
@@ -46,7 +56,7 @@ function forward_pass(
 ) where {T}
 
     forward_trajectory = Vector{Trajectory{T}}(undef, options.parallel)
-    Threads.@threads for i in 1:options.parallel
+    for i in 1:options.parallel
         # First up, sample a scenario. Note that if a cycle is detected, this will
         # return the cycle node as well.
         @_timeit_threadsafe model.timer_output "sample_scenario" begin
@@ -129,8 +139,10 @@ function forward_pass(
         if terminated_due_to_cycle
             # We terminated due to a cycle. Here is the list of possible
             # starting states for that node. Lock the node because
-            # `starting_states` is shared across the concurrently-running
-            # trajectories of this batch.
+            # `starting_states` is shared across nodes and, under
+            # `parallel_scheme = Threaded()`, multiple full iterations (each
+            # with its own forward pass) can run concurrently on that shared
+            # state.
             final_node_object = model[final_node[1]]
             lock(final_node_object.lock)
             try
