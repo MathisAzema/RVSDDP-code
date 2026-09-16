@@ -97,8 +97,6 @@ struct Options{T}
     cycle_discretization_delta::Float64
     # Flag to add cuts to similar nodes.
     refine_at_similar_nodes::Bool
-    # The node transition matrix.
-    Φ::Dict{Tuple{T,T},Float64}
     # A list of nodes that contain a subset of the children of node i.
     similar_children::Dict{T,Vector{T}}
     stopping_rules::Vector{AbstractStoppingRule}
@@ -119,7 +117,6 @@ struct Options{T}
     root_node_risk_measure::AbstractRiskMeasure
     #Mathis
     infinite::Bool
-    cut_selection::Bool
     shift_function::Function
     parallel::Int64
     start::Float64
@@ -146,7 +143,6 @@ struct Options{T}
         post_iteration_callback = result -> nothing,
         root_node_risk_measure::AbstractRiskMeasure = Expectation(),
         infinite::Bool = false,
-        cut_selection::Bool = false,
         shift_function::Function = RVSDDP.no_shift,
         parallel::Int64 = 1,
         refine_mode::Int64 = 0,
@@ -159,7 +155,6 @@ struct Options{T}
             to_nodal_form(model, risk_measures),
             cycle_discretization_delta,
             refine_at_similar_nodes,
-            build_Φ(model),
             get_same_children(model),
             stopping_rules,
             dashboard_callback,
@@ -176,7 +171,6 @@ struct Options{T}
             ReentrantLock(),
             root_node_risk_measure,
             infinite,
-            cut_selection,
             shift_function,
             parallel,
             time(),
@@ -667,12 +661,11 @@ function _refine_at_initial_point(
             items.supports,
             items.probability,
             items.objectives,
-            options.cut_selection,
             shift,
             length(options.log)+1,
             time()-options.start,
         )
-        
+
     else
         node_index = 1
         node =  model[node_index]
@@ -750,15 +743,18 @@ function backward_pass(
         if index in index_to_refine
             items_traj = [BackwardPassItems(T, Noise) for _ in trajectory]
             outgoing_states = [traj.sampled_states[index] for traj in trajectory]
-            for (index_traj,traj) in enumerate(trajectory)
-                outgoing_state = outgoing_states[index_traj]
-                items = items_traj[index_traj]
+            # Solve the (up to `options.parallel`) trajectories of this batch
+            # concurrently. Each trajectory writes only to its own
+            # `items_traj[index_traj]`; contention on the shared node
+            # subproblem(s) is serialized inside `solve_all_children` via
+            # `node.lock`.
+            Threads.@threads for index_traj in 1:length(trajectory)
                 solve_all_children(
                     model,
                     node,
-                    items,
+                    items_traj[index_traj],
                     1.0,
-                    outgoing_state,
+                    outgoing_states[index_traj],
                     options.backward_sampling_scheme,
                     options.duality_handler,
                     options,
@@ -766,33 +762,38 @@ function backward_pass(
             end
 
             next_node = model[node.children[1].term]
+            # A single shift is computed for the whole batch, from the
+            # combined items of all trajectories.
             shift=options.shift_function(model, next_node, items_traj, outgoing_states)
             if index <= length(model.nodes)-1 || options.refine_mode == 1
                 outgoing_state = outgoing_states[1]
                 items = items_traj[1]
                 _update_delta(next_node, outgoing_state, items.probability, items.objectives)
             end
-            for (index_traj, traj) in enumerate(trajectory)
-                outgoing_state = outgoing_states[index_traj]
+            # Add the cuts for the batch concurrently. Each thread writes to
+            # its own slot of `new_cuts_batch`; `refine_bellman_function`
+            # itself is serialized per-node via `node.lock`, so the shared
+            # `node.bellman_function`/`node.value_function` are never mutated
+            # by two threads at once.
+            new_cuts_batch = Vector{Any}(undef, length(trajectory))
+            Threads.@threads for index_traj in 1:length(trajectory)
                 items = items_traj[index_traj]
-                new_cuts = refine_bellman_function(
+                new_cuts_batch[index_traj] = refine_bellman_function(
                     model,
                     node,
                     node.bellman_function,
                     options.risk_measures[node_index],
-                    outgoing_state,
+                    outgoing_states[index_traj],
                     items.duals,
                     items.supports,
                     items.probability,
                     items.objectives,
-                    options.cut_selection,
                     shift,
                     length(options.log)+1,
                     time()-options.start,
                 )
-
-                push!(cuts[node_index], new_cuts)
             end
+            append!(cuts[node_index], new_cuts_batch)
         end
     end
     if 0 in index_to_refine
@@ -943,7 +944,6 @@ function calculate_bound(
     noise_supports = Any[]
     probabilities = Float64[]
     objectives = Float64[]
-    current_belief = initialize_belief(model)
     # Solve all problems that are children of the root node.
     for child in model.root_children
         # It's okay to skip nodes with zero probability.
@@ -956,24 +956,6 @@ function calculate_bound(
         lock(node.lock)
         try
             for noise in node.noise_terms
-                if node.objective_state !== nothing
-                    update_objective_state(
-                        node.objective_state,
-                        node.objective_state.initial_value,
-                        noise.term,
-                    )
-                end
-                # Update belief state, etc.
-                if node.belief_state !== nothing
-                    belief = node.belief_state::BeliefState{T}
-                    partition_index = belief.partition_index
-                    belief.updater(
-                        belief.belief,
-                        current_belief,
-                        partition_index,
-                        noise.term,
-                    )
-                end
                 subproblem_results = solve_subproblem(
                     model,
                     node,
@@ -1090,8 +1072,9 @@ Train the policy for `model`.
 
  - `time_limit::Float64`: number of seconds to train before termination.
 
- - `stoping_rules`: a vector of [`RVSDDP.AbstractStoppingRule`](@ref)s. Defaults
-   to [`SimulationStoppingRule`](@ref).
+ - `stoping_rules`: a vector of [`RVSDDP.AbstractStoppingRule`](@ref)s. There is
+   no default; you must specify this, `iteration_limit`, `time_limit`, or
+   `cut_limit`.
 
  - `print_level::Int`: control the level of printing to the screen. Defaults to
     `1`. Set to `0` to disable all printing.
@@ -1139,18 +1122,11 @@ Train the policy for `model`.
  - `cut_type`: choose between `RVSDDP.SINGLE_CUT` and `RVSDDP.MULTI_CUT` versions of
    RVSDDP.
 
- - `dashboard::Bool`: open a visualization of the training over time. Defaults
-    to `false`.
-
  - `parallel_scheme::AbstractParallelScheme`: specify a scheme for solving in
-   parallel. Defaults to `Threaded()`.
+   parallel. Defaults to `Serial()`.
 
  - `forward_pass::AbstractForwardPass`: specify a scheme to use for the forward
    passes.
-
- - `forward_pass_resampling_probability::Union{Nothing,Float64}`: set to a value
-   in `(0, 1)` to enable [`RiskAdjustedForwardPass`](@ref). Defaults to
-   `nothing` (disabled).
 
  - `add_to_existing_cuts::Bool`: set to `true` to allow training a model that
    was previously trained. Defaults to `false`.
@@ -1188,16 +1164,13 @@ function train(
     refine_at_similar_nodes::Bool = true,
     cut_deletion_minimum::Int = 1,
     backward_sampling_scheme::AbstractBackwardSamplingScheme = RVSDDP.CompleteSampler(),
-    dashboard::Bool = false,
     parallel_scheme::AbstractParallelScheme = Serial(),
     forward_pass::AbstractForwardPass = DefaultForwardPass(),
-    forward_pass_resampling_probability::Union{Nothing,Float64} = nothing,
     add_to_existing_cuts::Bool = false,
     duality_handler::AbstractDualityHandler = RVSDDP.ContinuousConicDuality(),
     forward_pass_callback::Function = (x) -> nothing,
     post_iteration_callback = result -> nothing,
     infinite::Bool=false,
-    cut_selection::Bool=false,
     discount_factor::Float64=0.1,
     shift_function::Function=RVSDDP.no_shift,
     parallel::Int64=1,
@@ -1207,10 +1180,6 @@ function train(
     # if infinite
     #     sampling_scheme = RVSDDP.InSampleMonteCarlo(max_depth=5*length(keys(model.nodes)))
     # end
-    if any(node -> node.objective_state !== nothing, values(model.nodes))
-        # FIXME(odow): Threaded is broken for objective states
-        parallel_scheme = Serial()
-    end
     if log_frequency <= 0
         msg = "`log_frequency` must be at least `1`. Got $log_frequency."
         throw(ArgumentError(msg))
@@ -1259,13 +1228,6 @@ function train(
         In a future release, this warning may turn into an error.
         """)
     end
-    if forward_pass_resampling_probability !== nothing
-        forward_pass = RiskAdjustedForwardPass(;
-            forward_pass = forward_pass,
-            risk_measure = risk_measure,
-            resampling_probability = forward_pass_resampling_probability,
-        )
-    end
     # Reset the TimerOutput.
     TimerOutputs.reset_timer!(model.timer_output)
     log_file_handle = open(log_file, "a")
@@ -1311,9 +1273,13 @@ function train(
     if cut_limit !== nothing
         push!(stopping_rules, CutLimit(cut_limit))
     end
-    # If no stopping rule exists, add the default rule.
+    # There is no default stopping rule: the caller must specify at least one
+    # of `iteration_limit`, `time_limit`, `cut_limit`, or `stopping_rules`.
     if isempty(stopping_rules)
-        push!(stopping_rules, SimulationStoppingRule())
+        error(
+            "No stopping rule specified. Pass `iteration_limit`, " *
+            "`time_limit`, `cut_limit`, or `stopping_rules` to `train`.",
+        )
     end
     # Update the nodes with the selected cut type (SINGLE_CUT or MULTI_CUT)
     # and the cut deletion minimum.
@@ -1328,11 +1294,7 @@ function train(
             oracle.deletion_minimum = cut_deletion_minimum
         end
     end
-    dashboard_callback = if dashboard
-        launch_dashboard()
-    else
-        (::Any, ::Any) -> nothing
-    end
+    dashboard_callback = (::Any, ::Any) -> nothing
     options = Options(
         model,
         model.initial_root_state;
@@ -1354,7 +1316,6 @@ function train(
         post_iteration_callback,
         root_node_risk_measure,
         infinite,
-        cut_selection,
         shift_function,
         parallel,
         refine_mode,
@@ -1441,18 +1402,7 @@ function _simulate(
             if objective_state_vector !== nothing
                 push!(objective_states, objective_state_vector)
             end
-            if node.belief_state !== nothing
-                belief = node.belief_state::BeliefState{T}
-                partition_index = belief.partition_index
-                current_belief = belief.updater(
-                    belief.belief,
-                    current_belief,
-                    partition_index,
-                    noise,
-                )
-            else
-                current_belief = Dict(node_index => 1.0)
-            end
+            current_belief = Dict(node_index => 1.0)
             # Solve the subproblem.
             subproblem_results = solve_subproblem(
                 model,

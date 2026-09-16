@@ -11,21 +11,3 @@ Backward sampler that returns all noises of the corresponding node.
 struct CompleteSampler <: AbstractBackwardSamplingScheme end
 
 sample_backward_noise_terms(::CompleteSampler, node) = node.noise_terms
-
-"""
-     MonteCarloSampler(number_of_samples::Int)
-
-Backward sampler that returns `number_of_samples` noises sampled with
-replacement from noises on the corresponding node.
-"""
-struct MonteCarloSampler <: AbstractBackwardSamplingScheme
-    number_of_samples::Int
-end
-
-function sample_backward_noise_terms(sampler::MonteCarloSampler, node::Node)
-    prob = 1 / sampler.number_of_samples
-    return [
-        Noise(sample_noise(node.noise_terms), prob) for
-        _ in 1:sampler.number_of_samples
-    ]
-end

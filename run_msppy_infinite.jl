@@ -4,15 +4,35 @@ Pkg.activate(".")
 
 using Distributed
 
+# Nbworkers is the OUTER parallelism: how many (seed, discount_factor, ...)
+# combinations run at once, each in its own worker process (see
+# run_rvsddp_infinite/run_evaluate/run_active below, which dispatch combos to
+# workers via `pmap`).
+#
+# NbThreadsPerWorker is the INNER parallelism: within a single training run,
+# RVSDDP.train's `parallel` keyword controls how many forward/backward-pass
+# trajectories are batched together with a single shift (see the paper's
+# "RV-SDDP_10"/"Cyclic SDDP_10" methods). Since forward_passes.jl and
+# algorithm.jl now dispatch that batch with `Threads.@threads`, each worker
+# process needs to be started with at least `parallel` Julia threads for the
+# batch to actually run concurrently instead of degrading to a sequential
+# loop. `exeflags` below passes `--threads` to every worker process spawned
+# by `addprocs`.
+#
+# Total cores used at once is up to Nbworkers * NbThreadsPerWorker: lower
+# Nbworkers if you raise NbThreadsPerWorker, to avoid oversubscribing the
+# machine.
 Nbworkers = 15
+NbThreadsPerWorker = 10
+worker_exeflags = "--threads=$(NbThreadsPerWorker)"
 println(nworkers())
 if nworkers() >= Nbworkers+1
     rmprocs(workers())
-    addprocs(Nbworkers)
+    addprocs(Nbworkers; exeflags=worker_exeflags)
 elseif nworkers() ==1
-    addprocs(Nbworkers - nworkers()+1)
+    addprocs(Nbworkers - nworkers()+1; exeflags=worker_exeflags)
 else
-    addprocs(Nbworkers - nworkers())
+    addprocs(Nbworkers - nworkers(); exeflags=worker_exeflags)
 end
 
 @everywhere import Pkg
@@ -359,5 +379,40 @@ function run_X_sharp(seed_list, parallel, time_max, shift_function_list, discoun
     results = pmap(combos) do (folder, time_limit, N, discount_factor)
         X_sharp_job(folder, time_limit, N, discount_factor)
     end
-    return 
+    return
 end
+
+# ==============================================================================
+# Example: batched training with real (threaded) parallelism, i.e. the paper's
+# "RV-SDDP_10" / "Cyclic SDDP_10" methods.
+#
+# `parallel = 10` below makes RVSDDP.train sample 10 forward-pass trajectories
+# per iteration and, in the backward pass, compute a SINGLE shift shared by all
+# 10 before inserting their cuts. As long as each worker process was started
+# with at least 10 threads (`NbThreadsPerWorker` above), those 10 trajectories
+# actually run concurrently via `Threads.@threads` in
+# src/plugins/forward_passes.jl and the backward pass in src/algorithm.jl,
+# instead of one after another.
+#
+# To run this from the REPL (after `include("run_msppy_infinite.jl")`), or by
+# uncommenting the two calls below and running `julia run_msppy_infinite.jl`:
+#
+# run_rvsddp_infinite(
+#     1:10,                                  # seed_list
+#     10,                                    # parallel (batch size / thread count)
+#     [36000],                               # time_max_list (seconds)
+#     [RVSDDP.shift_update_random_forward, RVSDDP.no_shift],  # shift_function_list
+#     [0.99],                                # discount_factor_list
+#     [0],                                   # refine_mode_list
+# )
+#
+# run_evaluate(
+#     1:10, 10, [36000],
+#     [RVSDDP.shift_update_random_forward, RVSDDP.no_shift],
+#     [0.99], [0], [600, 3600, 36000], [10000],
+# )
+#
+# Note: total cores in flight is up to Nbworkers * NbThreadsPerWorker (one
+# `parallel`-sized batch runs per worker at a time via `pmap`). Lower
+# Nbworkers at the top of this file if you raise the batch size here.
+# ==============================================================================
