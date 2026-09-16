@@ -28,6 +28,11 @@ using Random
 using Statistics
 using Gurobi
 
+# `check_replicas` lives in test_parallel_check.jl rather than in the package:
+# nothing in the algorithm calls it, it is a diagnostic. Including that file
+# only defines the function, it does not run its own checks.
+include(joinpath(@__DIR__, "test_parallel_check.jl"))
+
 const GRB_ENV = Gurobi.Env()
 optimizer = () -> Gurobi.Optimizer(GRB_ENV)
 
@@ -162,7 +167,7 @@ graph=RVSDDP.InfiniteLinearGraph(12);
 # it reuses everything already loaded and only pays the cost of training.
 # ------------------------------------------------------------------
 
-function run_diagnostic(; n_trials::Int = 1, parallel::Int = 10, time_limit::Real = 5)
+function run_diagnostic(; n_trials::Int = 1, parallel::Int = 2, time_limit::Real = 5)
     println("Threads.nthreads() = ", Threads.nthreads())
     results = Float64[]
     for trial in 1:n_trials
@@ -177,6 +182,7 @@ function run_diagnostic(; n_trials::Int = 1, parallel::Int = 10, time_limit::Rea
         )
 
         Random.seed!(trial)
+        start = time()
         RVSDDP.train(
             model_cyclic_sddp;
             refine_mode = 0,
@@ -197,7 +203,12 @@ function run_diagnostic(; n_trials::Int = 1, parallel::Int = 10, time_limit::Rea
         v = model_cyclic_sddp.approx_value[end][2]
         push!(results, v)
         total_cuts = sum(length(node.value_function.cut_V) for node in values(model_cyclic_sddp.nodes))
-        println("trial $trial (seed=$trial): lower_bound = $v, total cuts = $total_cuts")
+        # The property the parallel batch rests on: every worker's replica of a
+        # subproblem must still carry exactly the cuts the master has. A replica
+        # that drifted would produce duals for a stale value function, and so an
+        # invalid cut -- which is what a wrong lower bound really means here.
+        check_replicas(model_cyclic_sddp)
+        println("trial $trial (seed=$trial): lower_bound = $v, total cuts = $total_cuts, time = $(time() - start) seconds")
     end
 
     med = Statistics.median(results)

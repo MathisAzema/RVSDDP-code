@@ -4,15 +4,25 @@ Pkg.activate(".")
 
 using Distributed
 
+# Cores given to each training run. `RVSDDP.train(; parallel = k)` now really
+# spreads the k trajectories of a batch over k cores, but a Distributed worker
+# is started with one thread unless it is told otherwise, so set this to the
+# `parallel` value used below to get that speed-up.
+#
+# Keep Nbworkers * ThreadsPerWorker <= the number of physical cores: these
+# experiments are wall-clock limited, so oversubscribing the machine would
+# distort the reported times. Leaving it at 1 reproduces the previous
+# behaviour exactly (the batch is then simulated one trajectory at a time).
+ThreadsPerWorker = 1
 Nbworkers = 5
 println(nworkers())
 if nworkers() >= Nbworkers+1
     rmprocs(workers())
-    addprocs(Nbworkers)
+    addprocs(Nbworkers; exeflags = "-t $(ThreadsPerWorker)")
 elseif nworkers() ==1
-    addprocs(Nbworkers - nworkers()+1)
+    addprocs(Nbworkers - nworkers()+1; exeflags = "-t $(ThreadsPerWorker)")
 else
-    addprocs(Nbworkers - nworkers())
+    addprocs(Nbworkers - nworkers(); exeflags = "-t $(ThreadsPerWorker)")
 end
 
 println(nworkers())

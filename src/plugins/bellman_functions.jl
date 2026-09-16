@@ -108,10 +108,36 @@ function _add_cut(
     return
 end
 
+# Internal: the cut constraints that live in `node`'s own subproblem, in the
+# order they were added. `_replay_cuts_into_replicas!` walks this list to bring
+# a freshly built replica up to date with the master.
+_owned_cuts(node::Node) = get!(() -> Cut2[], node.ext, :owned_cuts)::Vector{Cut2}
+
+# Internal: add the cut `θ - Σᵢ coefficientsᵢ xᵢ ≥ rhs` (`≤` when maximizing) to
+# `node`'s subproblem and return its constraint reference. This is the same
+# constraint `_add_cut_constraint_to_model` builds on the master, and is what
+# keeps each replica's subproblem identical to the master's.
+function _add_cut_constraint_to_subproblem(
+    node::Node,
+    coefficients::Dict{Symbol,Float64},
+    rhs::Float64,
+)
+    V = node.bellman_function.global_theta
+    mod = JuMP.owner_model(V.theta)
+    expr = @expression(
+        mod,
+        V.theta - sum(coefficients[i] * x for (i, x) in V.states)
+    )
+    if JuMP.objective_sense(mod) == MOI.MIN_SENSE
+        return @constraint(mod, expr >= rhs)
+    end
+    return @constraint(mod, expr <= rhs)
+end
+
 #Mathis
 function _add_cut_constraint_to_model(
     model::PolicyGraph{T},
-    node::Node{T}, 
+    node::Node{T},
     V::ConvexApproximation, 
     cut::Cut, 
     shift::Tuple{Float64, Int64}
@@ -132,11 +158,39 @@ function _add_cut_constraint_to_model(
         mod,
         V.theta + yᵀμ - sum(cut.coefficients[i] * x for (i, x) in V.states)
     )
-    cut.constraint_ref = if JuMP.objective_sense(mod) == MOI.MIN_SENSE
-        csp = @constraint(mod, expr >= cut.intercept-shift[1])
-        _update_value_function(model[node.children[1].term], cut, shift, csp)
+    if JuMP.objective_sense(mod) == MOI.MIN_SENSE
+        rhs = cut.intercept - shift[1]
+        csp = @constraint(mod, expr >= rhs)
+        # Mirror the cut onto every replica of this node. Every worker of a
+        # `parallel > 1` batch must solve exactly the approximation the master
+        # holds; a replica that misses a cut would return duals for a stale
+        # value function and so produce an invalid cut.
+        replicas = Vector{JuMP.ConstraintRef}(undef, length(node.replicas))
+        _parallel_foreach(length(node.replicas)) do r
+            replicas[r] = _add_cut_constraint_to_subproblem(
+                node.replicas[r],
+                cut.coefficients,
+                rhs,
+            )
+        end
+        cutV = _update_value_function(
+            model[node.children[1].term],
+            cut,
+            shift,
+            csp,
+            replicas,
+        )
+        push!(_owned_cuts(node), cutV)
+        cut.constraint_ref = nothing
     else
-        @constraint(mod, expr <= cut.intercept)
+        cut.constraint_ref = @constraint(mod, expr <= cut.intercept)
+        for replica in node.replicas
+            _add_cut_constraint_to_subproblem(
+                replica,
+                cut.coefficients,
+                cut.intercept,
+            )
+        end
     end
     #Get cst in node
     return
@@ -146,7 +200,8 @@ function _update_value_function(
     node::Node{T}, 
     cut::Cut, 
     shift::Tuple{Float64, Int64},
-    csp::Union{Nothing, JuMP.ConstraintRef}
+    csp::Union{Nothing, JuMP.ConstraintRef},
+    constraint_replicas::Vector{JuMP.ConstraintRef} = JuMP.ConstraintRef[],
 ) where {T}
 
     vf=node.value_function
@@ -163,6 +218,7 @@ function _update_value_function(
         cV,
         csp,
         cut.state,
+        constraint_replicas,
     )
 
     push!(node.value_function.cut_V, cutV)
@@ -175,7 +231,7 @@ function _update_value_function(
         cut.coefficients,
     )
     push!(node.value_function.cut_TV, cutTV)
-    return
+    return cutV
 end
 
 @enum(CutType, SINGLE_CUT, MULTI_CUT)
@@ -436,6 +492,7 @@ function update_shift(
     shift_k::Float64,
 ) where {T}
     iter = length(node.value_function.cut_V)+1
+    shifted = Cut2[]
     for cut in node.value_function.cut_V
         if shift_k < cut.shift[end][1]
             push!(cut.shift, (shift_k, iter))
@@ -443,8 +500,26 @@ function update_shift(
             if cut.constraint_subproblem !== nothing
                 set_normalized_rhs(cut.constraint_subproblem, cut.intercept-shift_k)
             end
+            push!(shifted, cut)
         end
     end
+    # Bring the replicas' copies of those cuts down to the same level. Task `r`
+    # only ever touches replica `r`, so the refreshes run concurrently. This
+    # matters because a shift can touch every cut generated so far.
+    if !isempty(shifted)
+        n_replicas = maximum(length(cut.constraint_replicas) for cut in shifted)
+        _parallel_foreach(n_replicas) do r
+            for cut in shifted
+                if r <= length(cut.constraint_replicas)
+                    set_normalized_rhs(
+                        cut.constraint_replicas[r],
+                        cut.intercept-shift_k,
+                    )
+                end
+            end
+        end
+    end
+    return
 end
 
 function shift_update_random_forward(

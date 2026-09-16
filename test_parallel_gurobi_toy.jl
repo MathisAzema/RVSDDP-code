@@ -29,6 +29,11 @@ using Random
 using Statistics
 using Gurobi
 
+# `check_replicas` lives in test_parallel_check.jl rather than in the package:
+# nothing in the algorithm calls it, it is a diagnostic. Including that file
+# only defines the function, it does not run its own checks.
+include(joinpath(@__DIR__, "test_parallel_check.jl"))
+
 const GRB_ENV = Gurobi.Env()
 optimizer = () -> Gurobi.Optimizer(GRB_ENV)
 
@@ -128,6 +133,11 @@ function run_diagnostic_toy(; n_trials::Int = 1, parallel::Int = 10, iteration_l
         v = model_cyclic_sddp.approx_value[end][2]
         push!(results, v)
         total_cuts = sum(length(node.value_function.cut_V) for node in values(model_cyclic_sddp.nodes))
+        # The property the parallel batch rests on: every worker's replica of a
+        # subproblem must still carry exactly the cuts the master has. A replica
+        # that drifted would produce duals for a stale value function, and so an
+        # invalid cut -- which is what a wrong lower bound really means here.
+        check_replicas(model_cyclic_sddp)
         println("trial $trial (seed=$trial): lower_bound = $v, total cuts = $total_cuts")
         # for cut in model_cyclic_sddp.nodes[1].value_function.cut_V
         #     println("  cut: ", cut)

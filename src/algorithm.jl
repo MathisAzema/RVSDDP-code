@@ -16,6 +16,43 @@ macro _timeit_threadsafe(timer, label, block)
     return esc(code)
 end
 
+"""
+    _node(model::PolicyGraph{T}, index::T, replica::Int) where {T}
+
+The copy of node `index` that worker `replica` of a `parallel > 1` batch owns.
+
+Worker `1` works on the node itself; worker `r > 1` works on `replicas[r-1]`,
+an independent JuMP model carrying exactly the same cuts (see
+`_build_replicas!`). Two workers therefore never touch the same subproblem.
+"""
+function _node(model::PolicyGraph{T}, index::T, replica::Int) where {T}
+    node = model[index]
+    return replica == 1 ? node : node.replicas[replica-1]
+end
+
+"""
+    _parallel_foreach(f::Function, n::Int)
+
+Run `f(1), ..., f(n)`, concurrently when there is something to gain.
+
+This is how the `options.parallel` trajectories of a batch are actually spread
+over cores: one Julia task per trajectory, each working on its own replica of
+every subproblem. Start Julia with `julia -t n` (or `JULIA_NUM_THREADS=n`) to
+give those tasks `n` cores; with a single thread this degrades to a plain loop.
+"""
+function _parallel_foreach(f::Function, n::Int)
+    if n <= 1 || Threads.nthreads() == 1
+        for i in 1:n
+            f(i)
+        end
+        return
+    end
+    @sync for i in 1:n
+        Threads.@spawn f(i)
+    end
+    return
+end
+
 # to_nodal_form is an internal helper function so users can pass arguments like:
 # risk_measure = RVSDDP.Expectation(),
 # risk_measure = Dict(1=>Expectation(), 2=>WorstCase())
@@ -743,21 +780,28 @@ function backward_pass(
         if index in index_to_refine
             items_traj = [BackwardPassItems(T, Noise) for _ in trajectory]
             outgoing_states = [traj.sampled_states[index] for traj in trajectory]
-            for (index_traj,traj) in enumerate(trajectory)
-                outgoing_state = outgoing_states[index_traj]
-                items = items_traj[index_traj]
+            # Solve the children for every trajectory of the batch in parallel:
+            # trajectory `j` solves replica `j` of each child and fills its own
+            # `items_traj[j]`, so the tasks share nothing. They are all joined
+            # before the common shift below is computed.
+            _parallel_foreach(length(trajectory)) do index_traj
                 solve_all_children(
                     model,
                     node,
-                    items,
+                    items_traj[index_traj],
                     1.0,
-                    outgoing_state,
+                    outgoing_states[index_traj],
                     options.backward_sampling_scheme,
                     options.duality_handler,
-                    options,
+                    options;
+                    replica = index_traj,
                 )
             end
 
+            # From here on we are back on a single task: the shift is computed
+            # once from the whole batch, and the cuts it produces mutate the
+            # master model (and, through `_add_cut_constraint_to_model`, every
+            # replica), so they have to be added one at a time.
             next_node = model[node.children[1].term]
             shift=options.shift_function(model, next_node, items_traj, outgoing_states)
             if index <= length(model.nodes)-1 || options.refine_mode == 1
@@ -881,6 +925,16 @@ function solve_one_children(
     return
 end
 
+"""
+    solve_all_children(model, node, items, belief, outgoing_state, ...; replica)
+
+Solve every child of `node` at `outgoing_state` and accumulate the results in
+`items`.
+
+`replica` selects which copy of each child subproblem to solve, so that the
+`options.parallel` calls made at a given stage of the backward pass can run
+concurrently without sharing a JuMP model. See `_node`.
+"""
 function solve_all_children(
     model::PolicyGraph{T},
     node::Node{T},
@@ -889,7 +943,8 @@ function solve_all_children(
     outgoing_state::Dict{Symbol,Float64},
     backward_sampling_scheme::AbstractBackwardSamplingScheme,
     duality_handler::Union{Nothing,AbstractDualityHandler},
-    options,
+    options;
+    replica::Int = 1,
 ) where {T}
     for child in node.children
         # We _do_ want to solve zero probability nodes, because they might allow
@@ -900,7 +955,7 @@ function solve_all_children(
         # why, but tests failed when I tried to remove this.
         #
         # See RVSDDP.jl#796 and RVSDDP.jl#797 for more discussion.
-        child_node = model[child.term]
+        child_node = _node(model, child.term, replica)
         solve_one_children(
             model,
             child_node,
@@ -1283,6 +1338,30 @@ function train(
             cut_deletion_minimum
         for oracle in node.bellman_function.local_thetas
             oracle.deletion_minimum = cut_deletion_minimum
+        end
+    end
+    # `parallel` trajectories are simulated, and their children solved, at the
+    # same time. That needs `parallel - 1` extra copies of every subproblem, so
+    # that no two of them share a JuMP model; build any that are missing (this
+    # is a no-op when the graph was created with `max_parallel >= parallel`).
+    if parallel > 1
+        _build_replicas!(model, parallel)
+        for (_, node) in model.nodes
+            for replica in node.replicas
+                replica.bellman_function.cut_type = cut_type
+                replica.bellman_function.global_theta.deletion_minimum =
+                    cut_deletion_minimum
+            end
+        end
+        if Threads.nthreads() < parallel
+            @warn(
+                "`parallel = $(parallel)` but Julia was started with only " *
+                "$(Threads.nthreads()) thread(s), so the batch cannot use " *
+                "$(parallel) cores. Start Julia with `julia -t $(parallel)` " *
+                "(or set `JULIA_NUM_THREADS=$(parallel)`); with `Distributed`, " *
+                "pass `addprocs(n; exeflags = \"-t $(parallel)\")`.",
+                maxlog = 1,
+            )
         end
     end
     dashboard_callback = (::Any, ::Any) -> nothing

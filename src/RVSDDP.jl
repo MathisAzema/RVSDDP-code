@@ -25,7 +25,6 @@ include("plugins/headers.jl")
 include("JuMP.jl")
 
 # Printing utilities.
-include("cyclic.jl")
 include("print.jl")
 
 # The core RVSDDP code.
@@ -42,10 +41,10 @@ include("plugins/backward_sampling_schemes.jl")
 include("plugins/forward_passes.jl")
 
 # Visualization related code.
-include("visualization/value_functions.jl")
+include("value_functions.jl")
 
-# Other solvers.
-include("deterministic_equivalent.jl")
+# Scenario-tree scaffolding shared by the two-stage deterministic equivalent.
+include("scenario_tree.jl")
 
 #Mathis
 include("plugins/two_stage.jl")

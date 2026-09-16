@@ -17,10 +17,17 @@ function print_banner(io)
     return
 end
 
+# Count the number of distinct scenarios (root-to-leaf paths) in `model`, or
+# `Inf` if `model` has no leaves to reach --- which, in this package, means an
+# infinite-horizon model: `InfiniteLinearGraph` wraps the last stage back to
+# the first, so its scenario tree never terminates. `LinearGraph`, used for a
+# finite horizon, has none of these back edges and so a finite count.
+#
+# The topological sort below detects that case itself: `on_stack[node]` marks
+# the nodes on the current root-to-node path (as in the classical DFS grey/
+# white/black cycle test), so popping a node that is still on its own path is
+# exactly a cycle, and there is then no finite scenario count to report.
 function _unique_paths(model::PolicyGraph{T}) where {T}
-    if is_cyclic(model)
-        return Inf
-    end
     parents = Dict{T,Set{T}}(t => Set{T}() for t in keys(model.nodes))
     children = Dict{T,Set{T}}(t => Set{T}() for t in keys(model.nodes))
     for (t, node) in model.nodes
@@ -33,6 +40,7 @@ function _unique_paths(model::PolicyGraph{T}) where {T}
     end
     ordered = T[]
     in_order = Dict{T,Bool}(t => false for t in keys(model.nodes))
+    on_stack = Dict{T,Bool}(t => false for t in keys(model.nodes))
     stack = Tuple{T,Bool}[]
     for root_child in model.root_children
         if iszero(root_child.probability) || in_order[root_child.term]
@@ -44,10 +52,14 @@ function _unique_paths(model::PolicyGraph{T}) where {T}
             if !needs_checking
                 push!(ordered, node)
                 in_order[node] = true
+                on_stack[node] = false
                 continue
             elseif in_order[node]
                 continue
+            elseif on_stack[node]
+                return Inf  # Back edge onto the current path: a cycle.
             end
+            on_stack[node] = true
             push!(stack, (node, false))
             for child in children[node]
                 if !in_order[child]

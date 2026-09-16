@@ -349,6 +349,36 @@ mutable struct Cut2
     constraint_V::JuMP.ConstraintRef
     constraint_subproblem::Union{Nothing, JuMP.ConstraintRef}
     state::Dict{Symbol,Float64}
+    # The same cut constraint as `constraint_subproblem`, but in each parallel
+    # replica of the owning node's subproblem. Empty unless the model was built
+    # with `max_parallel > 1` (see `_build_replicas!`). Kept in the same order
+    # as `node.replicas`, so that a shift applied to `constraint_subproblem`
+    # can be mirrored onto every replica.
+    constraint_replicas::Vector{JuMP.ConstraintRef}
+end
+
+# Backwards-compatible constructor for call sites that predate replicas.
+function Cut2(
+    iteration::Int64,
+    time::Float64,
+    intercept::Float64,
+    coefficients::Dict{Symbol,Float64},
+    shift::Vector{Tuple{Float64,Int64}},
+    constraint_V::JuMP.ConstraintRef,
+    constraint_subproblem::Union{Nothing,JuMP.ConstraintRef},
+    state::Dict{Symbol,Float64},
+)
+    return Cut2(
+        iteration,
+        time,
+        intercept,
+        coefficients,
+        shift,
+        constraint_V,
+        constraint_subproblem,
+        state,
+        JuMP.ConstraintRef[],
+    )
 end
 
 mutable struct Cut3
@@ -413,6 +443,13 @@ mutable struct Node{T}
     #Mathis
     discount_factor::Float64
     delta::Vector{Float64}
+    # Independent copies of this node, one per extra worker of a
+    # `parallel > 1` batch (so `replicas[r]` is used by worker `r + 1`; worker
+    # 1 uses the node itself). Each replica owns its own `subproblem`, its own
+    # `parameterize` closure and its own cut constraints, so the workers of a
+    # batch never touch the same JuMP model. Empty unless the graph was built
+    # with `max_parallel > 1`. See `_build_replicas!`.
+    replicas::Vector{Node{T}}
 end
 
 function Base.show(io::IO, node::Node)
@@ -601,6 +638,7 @@ function PolicyGraph(
     bellman_function = nothing,
     direct_mode::Bool = false,
     discount_factor::Float64 = 1.0,
+    max_parallel::Int = 1,
 ) where {T}
     # Spend a one-off cost validating the graph.
     _validate_graph(graph)
@@ -674,6 +712,7 @@ function PolicyGraph(
             Dict{Symbol,Tuple{Float64,Float64,Bool}}(),
             discount_factor,
             Float64[],
+            Node{T}[],
         )
         subproblem.ext[:RVSDDP_policy_graph] = policy_graph
         policy_graph.nodes[node_index] = subproblem.ext[:RVSDDP_node] = node
@@ -732,7 +771,169 @@ function PolicyGraph(
         initialize_two_stage(policy_graph, node, optimizer)
         add_state_variables_to_value_function(node)
     end
+    # Everything `_build_replicas!` needs to rebuild a subproblem from scratch.
+    # We keep it on the graph so that `RVSDDP.train(; parallel = k)` can create
+    # the replicas itself if the graph was not built with `max_parallel >= k`.
+    policy_graph.ext[:replica_factory] = (
+        builder = builder,
+        sense = sense,
+        optimizer = optimizer,
+        direct_mode = direct_mode,
+        discount_factor = discount_factor,
+        bellman_function = bellman_function,
+    )
+    _build_replicas!(policy_graph, max_parallel)
     return policy_graph
+end
+
+"""
+    _build_replicas!(model::PolicyGraph, max_parallel::Int)
+
+Make sure every node of `model` owns at least `max_parallel - 1` replicas, so
+that a batch of `max_parallel` trajectories can be solved concurrently with one
+independent JuMP model per worker.
+
+A replica is built by re-running the user's `builder` on a fresh subproblem, so
+its `parameterize` closure, stage objective and cut constraints all refer to its
+own variables: two workers never touch the same JuMP model. Replicas only ever
+need to be *solved* (`solve_subproblem`), so the expensive per-node extras that
+are read on the master only --- the deterministic-equivalent `two_stage` model
+and the `value_function` models --- are left empty.
+
+Any cut already present on the master is replayed into the new replicas, so this
+is safe to call on a partially trained model.
+"""
+function _build_replicas!(model::PolicyGraph{T}, max_parallel::Int) where {T}
+    n_replicas = max(max_parallel - 1, 0)
+    if n_replicas == 0 ||
+       all(length(node.replicas) >= n_replicas for (_, node) in model.nodes)
+        return model
+    end
+    factory = get(model.ext, :replica_factory, nothing)
+    if factory === nothing
+        error(
+            "Cannot build the subproblem replicas needed by `parallel = " *
+            "$(max_parallel)`: this policy graph was not created by " *
+            "`RVSDDP.PolicyGraph(builder, graph; ...)`.",
+        )
+    end
+    for (node_index, node) in model.nodes
+        while length(node.replicas) < n_replicas
+            push!(node.replicas, _build_replica(model, node, factory))
+        end
+    end
+    # A replica added to an already-trained model starts out with no cuts, so
+    # replay the master's cuts into every replica that is missing them.
+    for (_, node) in model.nodes
+        _replay_cuts_into_replicas!(model, node)
+    end
+    _initialize_solver(model; throw_error = false)
+    return model
+end
+
+# Internal: build one independent copy of `node`'s subproblem.
+function _build_replica(
+    model::PolicyGraph{T},
+    node::Node{T},
+    factory,
+) where {T}
+    subproblem = construct_subproblem(factory.optimizer, factory.direct_mode)
+    replica = Node(
+        node.index,
+        subproblem,
+        # `two_stage` and `value_function` are master-only: a replica is never
+        # passed to `compute_V` / `compute_TV` / `update_shift`, so building the
+        # (expensive) deterministic equivalent for it would be pure waste.
+        TwoStage(
+            JuMP.Model(),
+            Dict{Symbol,VariableRef}(),
+            Dict{Symbol,Vector{VariableRef}}(),
+            VariableRef[],
+            Dict{Symbol,Float64}(),
+            Dict{Symbol,Float64}(),
+        ),
+        initialize_value_function(factory.sense, nothing),
+        Dict{Symbol,VariableRef}(),
+        JuMP.ConstraintRef[],
+        Noise{T}[],
+        Noise[],
+        (ω) -> nothing,
+        Dict{Symbol,State{JuMP.VariableRef}}(),
+        0.0,
+        false,
+        nothing,
+        nothing,
+        nothing,
+        nothing,
+        nothing,
+        false,
+        factory.direct_mode ? nothing : factory.optimizer,
+        Dict{Symbol,Any}(),
+        ReentrantLock(),
+        copy(node.incoming_state_bounds),
+        node.discount_factor,
+        Float64[],
+        Node{T}[],
+    )
+    # The builder resolves the node it is filling through `subproblem.ext`, so
+    # pointing that at the replica is enough to keep the master node untouched.
+    subproblem.ext[:RVSDDP_policy_graph] = model
+    subproblem.ext[:RVSDDP_node] = replica
+    JuMP.set_objective_sense(subproblem, model.objective_sense)
+    factory.builder(subproblem, node.index, factory.discount_factor)
+    if length(replica.noise_terms) == 0
+        push!(replica.noise_terms, Noise(nothing, 1.0))
+    end
+    replica.has_integrality = node.has_integrality
+    for child in node.children
+        push!(replica.children, Noise(child.term, child.probability))
+    end
+    replica.bellman_function =
+        initialize_bellman_function(factory.bellman_function, model, replica)
+    replica.bellman_function.cut_type = node.bellman_function.cut_type
+    replica.bellman_function.global_theta.deletion_minimum =
+        node.bellman_function.global_theta.deletion_minimum
+    # `initialize_bellman_function` also records, in the node's own value
+    # function, the initial bound `θ >= lower_bound` it puts in the subproblem.
+    # `update_shift` lowers that bound like any other cut, so the replica's copy
+    # of it has to be tracked alongside the master's.
+    if !isempty(node.value_function.cut_V) &&
+       !isempty(replica.value_function.cut_V)
+        bound_constraint = replica.value_function.cut_V[1].constraint_subproblem
+        if bound_constraint !== nothing
+            push!(
+                node.value_function.cut_V[1].constraint_replicas,
+                bound_constraint,
+            )
+        end
+    end
+    _initialize_solver(replica; throw_error = false)
+    return replica
+end
+
+# Internal: give every replica of `node` the cut constraints the master already
+# has, at their current (shifted) right-hand side.
+function _replay_cuts_into_replicas!(
+    model::PolicyGraph{T},
+    node::Node{T},
+) where {T}
+    if isempty(node.replicas)
+        return
+    end
+    for cut in _owned_cuts(node)
+        while length(cut.constraint_replicas) < length(node.replicas)
+            replica = node.replicas[length(cut.constraint_replicas)+1]
+            push!(
+                cut.constraint_replicas,
+                _add_cut_constraint_to_subproblem(
+                    replica,
+                    cut.coefficients,
+                    cut.intercept - cut.shift[end][1],
+                ),
+            )
+        end
+    end
+    return
 end
 
 function _get_incoming_domain(model::PolicyGraph{T}) where {T}
