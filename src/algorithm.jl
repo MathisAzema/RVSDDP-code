@@ -620,7 +620,7 @@ function _refine_at_initial_point(
         )
         shift=options.shift_function(model, next_node, [items], [outgoing_state])
 
-        _update_delta(next_node, outgoing_state, items.probability, items.objectives)
+        record_bellman_residual!(next_node, outgoing_state, items.probability, items.objectives)
 
         new_cuts = refine_bellman_function(
             model,
@@ -676,7 +676,7 @@ function _refine_at_initial_point(
         cut = Cut(iteration, time() - options.start, θᵏ, πᵏ, incoming_state)
 
         _update_value_function(node, cut, shift, nothing)
-        _update_delta(node, incoming_state, items.probability, items.objectives)
+        record_bellman_residual!(node, incoming_state, items.probability, items.objectives)
         return []
     end
     # println(new_cuts)
@@ -739,7 +739,7 @@ function backward_pass(
             if index <= length(model.nodes)-1 || options.refine_mode == 1
                 outgoing_state = outgoing_states[1]
                 items = items_traj[1]
-                _update_delta(next_node, outgoing_state, items.probability, items.objectives)
+                record_bellman_residual!(next_node, outgoing_state, items.probability, items.objectives)
             end
             for (index_traj, traj) in enumerate(trajectory)
                 outgoing_state = outgoing_states[index_traj]

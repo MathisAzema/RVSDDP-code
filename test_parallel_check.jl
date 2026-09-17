@@ -281,7 +281,7 @@ end
 
 const CASES = [
     (name = "cyclic-SDDP (no shift)", shift = RVSDDP.no_shift),
-    (name = "RV-SDDP (random shift)", shift = RVSDDP.shift_update_random_forward),
+    (name = "RV-SDDP (random shift)", shift = RVSDDP.random_shift),
 ]
 
 function run_parallel_checks()

@@ -234,7 +234,7 @@ mutable struct Node{T}
     subproblem::JuMP.Model
     # Mathis.
     # Box of each *outgoing* state variable, keyed as `states` below. Filled by
-    # `record_state_bounds!`; `shift_update_random_forward` samples the random
+    # `record_state_bounds!`; `random_shift` samples the random
     # shift candidate uniformly in it.
     state_lower_bounds::Dict{Symbol,Float64}
     state_upper_bounds::Dict{Symbol,Float64}
@@ -603,7 +603,7 @@ function _build_replica(
         node.index,
         subproblem,
         # The state bounds and `value_function` are master-only: a replica is
-        # never passed to `compute_V` / `compute_TV` / `update_shift`, so it has
+        # never passed to `compute_V` / `compute_TV` / `apply_shift!`, so it has
         # no use for either.
         Dict{Symbol,Float64}(),
         Dict{Symbol,Float64}(),
@@ -642,7 +642,7 @@ function _build_replica(
         initialize_bellman_function(factory.bellman_function, model, replica)
     # `initialize_bellman_function` also records, in the node's own value
     # function, the initial bound `θ >= lower_bound` it puts in the subproblem.
-    # `update_shift` lowers that bound like any other cut, so the replica's copy
+    # `apply_shift!` lowers that bound like any other cut, so the replica's copy
     # of it has to be tracked alongside the master's.
     if !isempty(node.value_function.cut_V) &&
        !isempty(replica.value_function.cut_V)

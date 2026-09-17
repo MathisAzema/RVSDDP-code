@@ -14,94 +14,121 @@
 #
 # A shift rule is any function
 #
-#     rule(model, node, items_traj, outgoing_states) -> (Δ, cut_index)
+#     rule(model, node, batch_items, trial_states) -> (Δ, cut_index)
 #
 # passed to `train(; shift_function = rule)`. It is called once per backward
 # step, after the children of `node` have been solved for every trajectory of
 # the batch, and it is responsible for applying its own shift through
-# `update_shift`. The returned `cut_index` is the cut count at which the shift
+# `apply_shift!`. The returned `cut_index` is the cut count at which the shift
 # takes effect, and is recorded in the shift history of the cut being created.
 #
 # A rule must keep the shift sequence *nonnegative* and *nonanticipative*: Δ >= 0
-# always, and Δ may only depend on information already available at that step.
-# Those are the two conditions the convergence analysis rests on.
+# always, and Δ may only depend on information available at that step. Those are
+# the two conditions the convergence analysis rests on.
 
-# The Bellman residual T(V)(x) - V(x) at one trial state, where T(V)(x) is
-# recovered from the children's objectives already computed by the backward
-# pass. This is the quantity the shift rules minimise, and also the per-iteration
-# residual δ recorded in `node.delta`.
+# ---------------------------------------------------------------------------
+# The Bellman residual
+# ---------------------------------------------------------------------------
+
+"""
+    bellman_residual(node, state, child_probabilities, child_objectives)
+
+The Bellman residual `T(V)(state) - V(state)` at one state.
+
+`T(V)(state)` is not re-solved: it is recovered as the expectation of
+`child_objectives` under `child_probabilities`, both of which the backward pass
+has just computed by solving the children of `node` at `state`.
+
+This residual is the quantity every shift rule minimises, and also what
+[`RVSDDP.record_bellman_residual!`](@ref) stores for diagnostics.
+"""
 function bellman_residual(
     node::Node,
     state::Dict{Symbol,Float64},
-    probability::Vector{Float64},
-    objectives::Vector{Float64},
+    child_probabilities::Vector{Float64},
+    child_objectives::Vector{Float64},
 )
-    TVx = 0.0
-    for i in 1:length(objectives)
-        TVx += probability[i] * objectives[i]
+    expected_cost_to_go = 0.0
+    for i in 1:length(child_objectives)
+        expected_cost_to_go += child_probabilities[i] * child_objectives[i]
     end
-    return TVx - compute_V(node.value_function, state)
+    return expected_cost_to_go - compute_V(node.value_function, state)
 end
 
-# Record the Bellman residual at this step for diagnostics; `node.delta` is what
-# the experiments plot as the shift sequence.
-function _update_delta(
+"""
+    record_bellman_residual!(node, state, child_probabilities, child_objectives)
+
+Append the Bellman residual at `state` to `node.delta`.
+
+This is bookkeeping only --- nothing in the algorithm reads `node.delta` back.
+It is the sequence the experiments plot next to the selected shifts.
+"""
+function record_bellman_residual!(
     node::Node{T},
-    incoming_state::Dict{Symbol,Float64},
-    risk_adjusted_probability::Vector{Float64},
-    objective_realizations::Vector{Float64},
+    state::Dict{Symbol,Float64},
+    child_probabilities::Vector{Float64},
+    child_objectives::Vector{Float64},
 ) where {T}
     push!(
         node.delta,
-        bellman_residual(
-            node,
-            incoming_state,
-            risk_adjusted_probability,
-            objective_realizations,
-        ),
+        bellman_residual(node, state, child_probabilities, child_objectives),
     )
     return
 end
 
-"""
-    update_shift(model, node, shift_k)
+# ---------------------------------------------------------------------------
+# Applying a shift
+# ---------------------------------------------------------------------------
 
-Lower every cut of `node` to the shift level `shift_k`, and record that level in
-each cut's shift history.
+"""
+    next_cut_index(node)
+
+The index the next cut of `node` will be given.
+
+Shifts are stamped with this index, which is what lets a cut tell later which
+shifts predate it --- see `Cut2.shift` and the cut replay in `_add_cuts`.
+"""
+next_cut_index(node::Node) = length(node.value_function.cut_V) + 1
+
+"""
+    apply_shift!(model, node, shift)
+
+Lower every cut of `node` to the level `shift`, and stamp that level into each
+cut's shift history.
 
 A cut is only ever moved *down*, so its effective shift is the smallest one
-selected since it was created: picking a small `shift_k` raises all the earlier
-cuts back towards their unshifted position, while later cuts are untouched. This
+selected since it was created: a small `shift` raises all earlier cuts back
+towards their unshifted position, while cuts created later are untouched. This
 is why a rule shifts the whole cut collection and not just the newest cut.
 """
-function update_shift(
+function apply_shift!(
     model::PolicyGraph{T},
     node::Node{T},
-    shift_k::Float64,
+    shift::Float64,
 ) where {T}
-    iter = length(node.value_function.cut_V)+1
-    shifted = Cut2[]
+    effective_from = next_cut_index(node)
+    lowered = Cut2[]
     for cut in node.value_function.cut_V
-        if shift_k < cut.shift[end][1]
-            push!(cut.shift, (shift_k, iter))
-            set_normalized_rhs(cut.constraint_V, cut.intercept-shift_k)
+        if shift < cut.shift[end][1]
+            push!(cut.shift, (shift, effective_from))
+            set_normalized_rhs(cut.constraint_V, cut.intercept - shift)
             if cut.constraint_subproblem !== nothing
-                set_normalized_rhs(cut.constraint_subproblem, cut.intercept-shift_k)
+                set_normalized_rhs(cut.constraint_subproblem, cut.intercept - shift)
             end
-            push!(shifted, cut)
+            push!(lowered, cut)
         end
     end
     # Bring the replicas' copies of those cuts down to the same level. Task `r`
     # only ever touches replica `r`, so the refreshes run concurrently. This
     # matters because a shift can touch every cut generated so far.
-    if !isempty(shifted)
-        n_replicas = maximum(length(cut.constraint_replicas) for cut in shifted)
+    if !isempty(lowered)
+        n_replicas = maximum(length(cut.constraint_replicas) for cut in lowered)
         _parallel_foreach(n_replicas) do r
-            for cut in shifted
+            for cut in lowered
                 if r <= length(cut.constraint_replicas)
                     set_normalized_rhs(
                         cut.constraint_replicas[r],
-                        cut.intercept-shift_k,
+                        cut.intercept - shift,
                     )
                 end
             end
@@ -110,9 +137,18 @@ function update_shift(
     return
 end
 
+# ---------------------------------------------------------------------------
+# The rules
+# ---------------------------------------------------------------------------
+
+# Each rule below is followed by the short name its results directory is built
+# from (see `shift_label` in headers.jl). A rule that defines no label falls back
+# to its function name.
+shift_label(rule::Function) = string(rule)
+
 #Mathis attention il faudrait un shift pour chaque enfant
 """
-    no_shift(model, node, items_traj, outgoing_states)
+    no_shift(model, node, batch_items, trial_states)
 
 The baseline rule: never shift. RV-SDDP then degenerates into the plain cyclic
 SDDP scheme, whose cuts keep their unshifted position and whose value function
@@ -121,61 +157,75 @@ therefore still provides a converging lower bound.
 function no_shift(
     model::PolicyGraph{T},
     node::Node{T},
-    items_traj::Vector{BackwardPassItems{T, Noise}},
-    outgoing_states::Vector{Dict{Symbol, Float64}},
+    batch_items::Vector{BackwardPassItems{T,Noise}},
+    trial_states::Vector{Dict{Symbol,Float64}},
 ) where {T}
-    return (0.0, length(node.value_function.cut_V)+1)
+    return (0.0, next_cut_index(node))
+end
+
+shift_label(::typeof(no_shift)) = "cyclic_sddp"
+
+# How much better the random candidate must be able to do before its exact
+# Bellman value is worth an LP per noise. Screening against the incumbent minus
+# this margin keeps the rule from paying for a candidate that can only tie.
+const _SCREENING_MARGIN = 1e-4
+
+# Draw one state uniformly in the node's state box. The keys are taken from
+# `like` so that the drawn state matches the trial states exactly.
+function _random_state_in_box(node::Node, like::Dict{Symbol,Float64})
+    state = Dict{Symbol,Float64}()
+    for (key, _) in like
+        lower = node.state_lower_bounds[key]
+        upper = node.state_upper_bounds[key]
+        state[key] = rand() * (upper - lower) + lower
+    end
+    return state
 end
 
 """
-    shift_update_random_forward(model, node, items_traj, outgoing_states)
+    random_shift(model, node, batch_items, trial_states)
 
-The random-shift rule used in the experiments: take the smallest Bellman
+The random-shift rule used in the experiments: the shift is the smallest Bellman
 residual over the trial states of the batch and one extra state drawn uniformly
 at random in the state box.
 
-Including the trial states is what makes the newly generated cut active where it
-is generated; the random state is what makes the rule explore the whole state
-space, which is what the almost-sure convergence argument needs. The random
-state is only paid for when it can actually win: its residual is first bounded
-below using the cut envelope alone (`compute_approx_TV`, cheap), and the exact
-Bellman value (`compute_TV`, one LP per noise) is computed only if that bound is
-still better than the best trial-state residual.
+Keeping the trial states as candidates is what makes a newly generated cut
+active where it was generated; the random state is what makes the rule explore
+the whole state space, which is what the almost-sure convergence argument needs.
+
+The random state is only paid for when it can actually win. Its residual is
+first bounded below using the cut envelope alone (`compute_approx_TV`, no
+solve), and the exact Bellman value (`compute_TV`, one LP per noise) is computed
+only if that bound still beats the best trial-state residual.
 """
-function shift_update_random_forward(
+function random_shift(
     model::PolicyGraph{T},
     node::Node{T},
-    items_traj::Vector{BackwardPassItems{T, Noise}},
-    outgoing_states::Vector{Dict{Symbol, Float64}},
+    batch_items::Vector{BackwardPassItems{T,Noise}},
+    trial_states::Vector{Dict{Symbol,Float64}},
 ) where {T}
-    # Best residual over the trial states of the batch.
-    res_traj = zeros(length(items_traj))
-    for (i, items) in enumerate(items_traj)
-        res_traj[i] = bellman_residual(
+    # Candidates 1..n: the trial states the batch has just cut at.
+    trial_residuals = zeros(length(batch_items))
+    for (i, items) in enumerate(batch_items)
+        trial_residuals[i] = bellman_residual(
             node,
-            outgoing_states[i],
+            trial_states[i],
             items.probability,
             items.objectives,
         )
     end
-    shift, _ = findmin(res_traj)
+    shift = minimum(trial_residuals)
 
-    # One extra candidate, drawn uniformly in the state box.
-    sol=Dict{Symbol,Float64}()
-    for (i, _) in outgoing_states[1]
-        lb=node.state_lower_bounds[i]
-        ub=node.state_upper_bounds[i]
-        sol[i]=rand()*(ub-lb)+lb
+    # Candidate n+1: a uniform draw in the state box, screened before solving.
+    candidate = _random_state_in_box(node, trial_states[1])
+    V_candidate = compute_V(node.value_function, candidate)
+    residual_bound = compute_approx_TV(node.value_function, candidate) - V_candidate
+    if residual_bound <= shift - _SCREENING_MARGIN
+        shift = min(shift, compute_TV(node, candidate) - V_candidate)
     end
-    Vrand=compute_V(node.value_function, sol)
-    TVrandapprox = compute_approx_TV(node.value_function, sol)
-    shift_rand=Inf
-    if TVrandapprox-Vrand<= shift-1e-4
-        TVrand=compute_TV(node, sol)
-        shift_rand=TVrand-Vrand
-    end
-    shift = min(shift, shift_rand)
-    update_shift(model, node, shift)
 
-    return (shift, length(node.value_function.cut_V)+1)
+    apply_shift!(model, node, shift)
+    return (shift, next_cut_index(node))
 end
+
+shift_label(::typeof(random_shift)) = "RVSDDP"

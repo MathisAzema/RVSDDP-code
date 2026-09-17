@@ -21,7 +21,7 @@ Record the box `[lower_bound, upper_bound]` of each outgoing state variable of
 `node`.
 
 That box is the only thing the algorithm needs to know about the geometry of the
-state space: `shift_update_random_forward` draws the random shift candidate `ζ`
+state space: `random_shift` draws the random shift candidate `ζ`
 uniformly inside it, and `add_state_variables_to_value_function` uses it to bound
 the value function's own copy of the state.
 """
@@ -113,7 +113,7 @@ function compute_V(vf::Value_Function, incoming_state::Dict{Symbol,Float64})
 end
 
 # The same envelope with the shifts undone, i.e. the cheap lower estimate of
-# T(V)(x) that `shift_update_random_forward` screens candidates with before
+# T(V)(x) that `random_shift` screens candidates with before
 # paying for a real Bellman evaluation (Proposition 10).
 function compute_approx_TV(vf::Value_Function, incoming_state::Dict{Symbol,Float64})
     return maximum([

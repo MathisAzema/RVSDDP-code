@@ -180,28 +180,48 @@ end
     shift_function(
         model::PolicyGraph{T},
         node::Node{T},
-        items_traj::Vector{BackwardPassItems{T,Noise}},
-        outgoing_states::Vector{Dict{Symbol,Float64}},
+        batch_items::Vector{BackwardPassItems{T,Noise}},
+        trial_states::Vector{Dict{Symbol,Float64}},
     )::Tuple{Float64,Int}
 
 The interface for a shift-selection rule, passed as
 `train(; shift_function = ...)`.
 
 Called once per backward step, after the children of `node` have been solved for
-every trajectory of the batch. `items_traj[j]` holds those solutions for
-trajectory `j`, and `outgoing_states[j]` the trial state they were solved at.
+every trajectory of the batch. `batch_items[j]` holds those solutions for
+trajectory `j`, and `trial_states[j]` the trial state they were solved at.
 
 Returns the selected shift `Δ` and the cut count at which it takes effect. The
-rule is responsible for applying `Δ` itself, through [`RVSDDP.update_shift`](@ref).
+rule is responsible for applying `Δ` itself, through [`RVSDDP.apply_shift!`](@ref).
 
 The sequence of shifts it produces must be *nonnegative* (`Δ >= 0`) and
 *nonanticipative* (`Δ` may only depend on information available at that step);
 the convergence analysis rests on those two conditions.
 
 See [`RVSDDP.no_shift`](@ref) and
-[`RVSDDP.shift_update_random_forward`](@ref) for the two rules shipped here.
+[`RVSDDP.random_shift`](@ref) for the two rules shipped here.
 """
 function shift_function end
+
+"""
+    shift_label(rule)::String
+
+The short name a shift rule is known by in the results directories, defined in
+`shifts.jl` alongside the rule itself.
+
+This is deliberately *not* the function's own name. Keeping the two apart lets a
+directory be named after the method it implements --- `RVSDDP`, `cyclic_sddp`
+--- rather than after the mechanism, and lets a rule be renamed without
+orphaning the results already written to disk. The run scripts build their paths
+with it:
+
+```julia
+folder = "results_toy/\$(RVSDDP.shift_label(shift_function))_parallel_\$(parallel)"
+```
+
+Defaults to the function's name, so a new rule works without defining one.
+"""
+function shift_label end
 
 # ============================= parallel schemes ============================= #
 

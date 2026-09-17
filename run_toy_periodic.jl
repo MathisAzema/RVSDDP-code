@@ -106,7 +106,7 @@ end
     # Créer une DataFrame
     df_cuts = DataFrame(cuts_data)
 
-    folder1 = "results_toy/$(shift_function)_$(refine_mode)_parallel_$(parallel)"
+    folder1 = "results_toy/$(RVSDDP.shift_label(shift_function))_$(refine_mode)_parallel_$(parallel)"
     if !isdir(folder1)
         mkdir(folder1)
     end
@@ -151,7 +151,7 @@ end
 function run_toy_periodic(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, refine_mode_list)
     for shift_function in shift_function_list
         for refine_mode in refine_mode_list
-            folder1 = "results_toy/$(shift_function)_$(refine_mode)_parallel_$(parallel)"
+            folder1 = "results_toy/$(RVSDDP.shift_label(shift_function))_$(refine_mode)_parallel_$(parallel)"
             if !isdir(folder1)
                 mkdir(folder1)
             end
@@ -213,7 +213,7 @@ end
 end
 
 function run_evaluate(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, time_list, refine_mode_list, N_list)
-    combos = [("results_toy/$(shift_function)_$(refine_mode)_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)", time_limit, N, discount_factor) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list for time_limit in time_list for N in N_list]
+    combos = [("results_toy/$(RVSDDP.shift_label(shift_function))_$(refine_mode)_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)", time_limit, N, discount_factor) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list for time_limit in time_list for N in N_list]
 
     results = pmap(combos) do (folder, time_limit, N, discount_factor)
         evaluate_job(folder, time_limit, N, discount_factor)
