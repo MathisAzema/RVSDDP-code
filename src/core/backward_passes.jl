@@ -173,7 +173,7 @@ function _refine_at_initial_point(
             items.objectives,
             shift,
             length(options.log)+1,
-            time()-options.start,
+            time()-options.start_time,
         )
 
     else
@@ -212,7 +212,7 @@ function _refine_at_initial_point(
 
         iteration = length(options.log)+1
 
-        cut = CandidateCut(iteration, time() - options.start, θᵏ, πᵏ, incoming_state)
+        cut = CandidateCut(iteration, time() - options.start_time, θᵏ, πᵏ, incoming_state)
 
         _update_value_function(node, cut, shift, nothing)
         record_bellman_residual!(node, incoming_state, items.probability, items.objectives)
@@ -291,7 +291,7 @@ function backward_pass(
                     items.objectives,
                     shift,
                     length(options.log)+1,
-                    time()-options.start,
+                    time()-options.start_time,
                 )
 
                 push!(cuts[node_index], new_cuts)
@@ -304,6 +304,6 @@ function backward_pass(
     # `_refine_at_initial_point`.
     new_cuts_0 = _refine_at_initial_point(model, options)
     push!(cuts[length(model.nodes)], new_cuts_0)
-    push!(model.approx_value, (time()-options.start, compute_approx_value(model)))
+    push!(model.approx_value, (time()-options.start_time, compute_approx_value(model)))
     return cuts
 end

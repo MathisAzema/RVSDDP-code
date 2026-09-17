@@ -195,7 +195,7 @@ function reconstruct_cuts(df)
 end
 
 """
-    _add_cuts(model, folder, keep; skip_root_node, reference_iteration)
+    _add_cuts(model, folder, keep; reference_iteration)
 
 Replay into `model` the cuts of the run saved under `folder` that satisfy
 `keep(cut)`, rebuilding each one in the three places that hold it: the value
@@ -207,18 +207,16 @@ not at its final one: `limit[n]` counts how many cuts node `n` had received by
 then, and any shift `(value, cut_count)` recorded beyond that count had not
 happened yet and is dropped.
 
-`skip_root_node` drops the node-1 cuts (finite-horizon replay), and
 `reference_iteration` overrides the iteration used to truncate
 `approx_values.csv` and `deltas.csv`; by default that is the largest iteration
 among the kept cuts.
 
-The three `_add_cuts_*` entry points below differ only in those arguments.
+The two `_add_cuts_*` entry points below differ only in that argument.
 """
 function _add_cuts(
     model::PolicyGraph,
     folder::String,
     keep::Function;
-    skip_root_node::Bool = false,
     reference_iteration::Union{Int,Nothing} = nothing,
 )
     if !isfile("$(folder)/cuts.csv")
@@ -242,7 +240,7 @@ function _add_cuts(
     end
 
     for cut in cuts
-        if cut.iteration < 1 || !keep(cut) || (skip_root_node && cut.node < 2)
+        if cut.iteration < 1 || !keep(cut)
             continue
         end
         node_index = cut.node
@@ -290,12 +288,6 @@ end
 # Replay the saved run up to a given wall-clock time.
 function _add_cuts_time(model::PolicyGraph, time::Int64, folder::String)
     return _add_cuts(model, folder, cut -> cut.time <= time)
-end
-
-# As `_add_cuts_time`, but for a finite-horizon model, whose first node carries
-# no cost-to-go and therefore no cuts to replay.
-function _add_cuts_finite(model::PolicyGraph, time::Int64, folder::String)
-    return _add_cuts(model, folder, cut -> cut.time <= time; skip_root_node = true)
 end
 
 # Copy the cuts of one in-memory model into another, dropping the shift from the

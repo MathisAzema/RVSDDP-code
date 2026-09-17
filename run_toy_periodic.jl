@@ -138,7 +138,11 @@ end
     for (iter,val) in enumerate(model.approx_value)
         push!(approx_value_data, Dict(
             :iteration => iter,
-            :approx_value => val,
+            # `val` is the (elapsed time, value) pair `backward_pass` records.
+            # Split it here: written as a tuple it would land in a single
+            # stringified column, and `_add_cuts` reads the two back separately.
+            :time => val[1],
+            :approx_value => val[2],
         ))
     end
 

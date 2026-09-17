@@ -19,8 +19,9 @@ struct Options
     # paper uses.
     risk_measure::AbstractRiskMeasure
     stopping_rules::Vector{AbstractStoppingRule}
-    dashboard_callback::Function
     print_level::Int
+    # When training started. Every elapsed time -- in the log and on each cut --
+    # is measured from here.
     start_time::Float64
     log::Vector{Log}
     log_file_handle::Any
@@ -36,7 +37,6 @@ struct Options
     infinite::Bool
     shift_function::Function
     parallel::Int64
-    start::Float64
     refine_scheme::Function
     # Internal function: users should never construct this themselves.
     function Options(
@@ -45,9 +45,7 @@ struct Options
         backward_sampling_scheme::AbstractBackwardSamplingScheme = CompleteSampler(),
         risk_measure::AbstractRiskMeasure = Expectation(),
         stopping_rules::Vector{AbstractStoppingRule} = RVSDDP.AbstractStoppingRule[],
-        dashboard_callback::Function = (a, b) -> nothing,
         print_level::Int = 0,
-        start_time::Float64 = 0.0,
         log::Vector{Log} = Log[],
         log_file_handle = IOBuffer(),
         log_frequency::Union{Int,Function} = 1,
@@ -66,9 +64,8 @@ struct Options
             backward_sampling_scheme,
             risk_measure,
             stopping_rules,
-            dashboard_callback,
             print_level,
-            start_time,
+            time(),  # start_time
             log,
             log_file_handle,
             log_frequency,
@@ -81,7 +78,6 @@ struct Options
             infinite,
             shift_function,
             parallel,
-            time(),
             refine_scheme,
         )
     end

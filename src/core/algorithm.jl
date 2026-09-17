@@ -13,14 +13,12 @@ mutable struct Trajectory{T}
     cumulative_value::Float64
 end
 
-struct IterationResult{T}
+struct IterationResult
     pid::Int
     bound::Float64
     cumulative_value::Float64
     has_converged::Bool
     status::Symbol
-    cuts::Dict{T,Vector{Any}}
-    numerical_issue::Bool
 end
 
 function iteration(model::PolicyGraph{T}, options::Options) where {T}
@@ -66,8 +64,6 @@ function iteration(model::PolicyGraph{T}, options::Options) where {T}
             forward_trajectory[1].cumulative_value,
             has_converged,
             status,
-            cuts,
-            lock(() -> model.ext[:numerical_issue], model.lock),
         )
     finally
         unlock(options.lock)
@@ -216,7 +212,6 @@ function train(
     forward_pass_callback::Function = (x) -> nothing,
     post_iteration_callback = result -> nothing,
     infinite::Bool=false,
-    discount_factor::Float64=0.1,
     shift_function::Function=RVSDDP.no_shift,
     parallel::Int64=1,
     refine_scheme::Function = RVSDDP.refine_all,
@@ -338,16 +333,13 @@ function train(
             )
         end
     end
-    dashboard_callback = (::Any, ::Any) -> nothing
     options = Options(
         model.initial_root_state;
         sampling_scheme,
         backward_sampling_scheme,
         risk_measure,
         stopping_rules,
-        dashboard_callback,
         print_level,
-        start_time = time(),
         log,
         log_file_handle,
         log_frequency = log_frequency_f,
@@ -378,9 +370,6 @@ function train(
             close(log_file_handle)
             throw(ex)
         end
-    finally
-        # And close the dashboard callback if necessary.
-        dashboard_callback(nothing, true)
     end
     training_results = TrainingResults(status, log)
     model.most_recent_training_results = training_results

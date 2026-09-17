@@ -235,7 +235,6 @@ mutable struct Node{T}
     state_lower_bounds::Dict{Symbol,Float64}
     state_upper_bounds::Dict{Symbol,Float64}
     value_function::ValueFunction
-    constraints::Vector{ConstraintRef}
     # A vector of the child nodes.
     children::Vector{Noise{T}}
     # A vector of the discrete stagewise-independent noise terms.
@@ -449,7 +448,6 @@ function PolicyGraph(
             Dict{Symbol,Float64}(),
             Dict{Symbol,Float64}(),
             valuefunction,
-            JuMP.ConstraintRef[],
             Noise{T}[],
             Noise[],
             (ω) -> nothing,
@@ -603,7 +601,6 @@ function _build_replica(
         Dict{Symbol,Float64}(),
         Dict{Symbol,Float64}(),
         initialize_value_function(factory.sense, nothing),
-        JuMP.ConstraintRef[],
         Noise{T}[],
         Noise[],
         (ω) -> nothing,
