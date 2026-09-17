@@ -1,3 +1,18 @@
+# Experiences sur l'instance hydro-thermique MSPPy.
+#
+# Ce fichier remplace run_msppy_infinite.jl et run_msppy_periodic.jl, qui ne
+# differaient que par la politique de rollout. Celle-ci decoule maintenant du
+# schema de raffinement (voir `rollout_for`), qui est le seul appariement
+# utilise : il n'y a plus qu'un point d'entree, `run_rvsddp`.
+#
+# Depuis le REPL :
+#
+#     include("run_msppy.jl")
+#     run_rvsddp([1, 2, 3], 1, [36000], [RVSDDP.no_shift], [0.995],
+#                [RVSDDP.refine_periodic])
+#     run_evaluate([1, 2, 3], 1, [36000], [RVSDDP.no_shift], [0.995],
+#                  [RVSDDP.refine_periodic], [3600, 36000], [5000])
+
 import Pkg
 # Pkg.instantiate()
 Pkg.activate(".")
@@ -14,18 +29,19 @@ using Distributed
 # distort the reported times. Leaving it at 1 reproduces the previous
 # behaviour exactly (the batch is then simulated one trajectory at a time).
 ThreadsPerWorker = 1
+# 10 pour les runs a rollout croissant, 5 pour ceux a rollout fixe dans l'article.
 Nbworkers = 10
-println(nworkers())
-if nworkers() >= Nbworkers+1
+# `nworkers()` vaut 1 quand aucun worker ne tourne (le master est compte), ce qui
+# rendait l'arithmetique a trois branches d'avant difficile a lire. On repart
+# d'une table rase : `nprocs() > 1` est vrai seulement s'il y a de vrais workers.
+if nprocs() > 1
     rmprocs(workers())
-    addprocs(Nbworkers; exeflags = "-t $(ThreadsPerWorker)")
-elseif nworkers() ==1
-    addprocs(Nbworkers - nworkers()+1; exeflags = "-t $(ThreadsPerWorker)")
-else
-    addprocs(Nbworkers - nworkers(); exeflags = "-t $(ThreadsPerWorker)")
 end
+addprocs(Nbworkers; exeflags = "-t $(ThreadsPerWorker)")
 
-for w in workers(); println("pid $w: ", fetch(@spawnat w Threads.nthreads()), " threads"); end
+for w in workers()
+    println("pid $w: ", fetch(@spawnat w Threads.nthreads()), " threads")
+end
 
 @everywhere import Pkg
 @everywhere Pkg.activate(".")
@@ -34,6 +50,29 @@ for w in workers(); println("pid $w: ", fetch(@spawnat w Threads.nthreads()), " 
 @everywhere using Gurobi
 @everywhere const GRB_ENV = Gurobi.Env()
 @everywhere optimizer=() -> Gurobi.Optimizer(GRB_ENV)
+
+# Nombre de noeuds du graphe periodique. Sert aussi a borner les
+# trajectoires et a decouper les resultats par etape.
+@everywhere const PERIOD = 12
+
+# Les deux politiques de profondeur de trajectoire utilisees dans l'article.
+# Fonctions nommees plutot que lambdas : `pmap` les transmet alors aux workers
+# par leur nom, sans avoir a serialiser une fermeture anonyme.
+@everywhere growing_rollout(i::Int) = PERIOD * i - 1   # croit avec l'iteration
+@everywhere fixed_rollout(i::Int) = 10 * PERIOD - 1    # 10 periodes, constante
+
+# La politique de rollout decoule du schema de raffinement : c'est le seul
+# appariement utilise, et le lier ici garantit que le dossier de resultats -- que
+# `method_label` nomme d'apres `refine_scheme` -- decrit sans ambiguite le run
+# qu'il contient. Un schema inconnu echoue plutot que de retomber sur un defaut.
+@everywhere function rollout_for(refine_scheme::Function)
+    if refine_scheme === RVSDDP.refine_periodic
+        return fixed_rollout
+    elseif refine_scheme === RVSDDP.refine_all
+        return growing_rollout
+    end
+    return error("Aucune politique de rollout associee a $(refine_scheme).")
+end
 
 @everywhere function msppy_hydro_thermal_builder(sp::Model, node::Int, discount_factor::Float64)
     thermal_ub = Array{Float64, 2}[
@@ -92,18 +131,15 @@ for w in workers(); println("pid $w: ", fetch(@spawnat w Threads.nthreads()), " 
     ]
 
 
-    TimeHorizon = 12
-    S=1
-
     S=82
 
-    Ω = [[[scenarios[i][t][w] for i in 1:4]  for w in 1:S] for t in 1:TimeHorizon]
+    Ω = [[[scenarios[i][t][w] for i in 1:4]  for w in 1:S] for t in 1:PERIOD]
     P = [1 / S for w in 1:S]
 
     inflow_initial = [39717.564, 6632.5141, 15897.183, 2525.938]
 
     t = node
-    month = t % TimeHorizon == 0 ? TimeHorizon : t % TimeHorizon  # Year to month conversion.
+    month = t % PERIOD == 0 ? PERIOD : t % PERIOD  # Year to month conversion.
     @variable(sp,
         0 <= storedEnergy[i = 1:4] <= storedEnergy_ub[i],
         RVSDDP.State, initial_value = storedEnergy_initial[i])
@@ -127,7 +163,7 @@ for w in workers(); println("pid $w: ", fetch(@spawnat w Threads.nthreads()), " 
         sum(exchange[:, 5]) == sum(exchange[5, :])
     end)
     if t != 1 || true  # t=1 is handled in the @variable constructor.
-        r = (t - 1) % TimeHorizon == 0 ? TimeHorizon : (t - 1) % TimeHorizon
+        r = (t - 1) % PERIOD == 0 ? PERIOD : (t - 1) % PERIOD
         RVSDDP.parameterize(sp, Ω[t], P) do ω
             for i in 1:4
                 JuMP.fix(inflow[i], ω[i])
@@ -136,11 +172,13 @@ for w in workers(); println("pid $w: ", fetch(@spawnat w Threads.nthreads()), " 
     end
 end
 
-@everywhere graph=RVSDDP.InfiniteLinearGraph(12);
+@everywhere graph=RVSDDP.InfiniteLinearGraph(PERIOD);
 
 @everywhere using CSV, DataFrames, JSON
 
 @everywhere function rvsddp_job(seed, parallel, time_max, shift_function, discount_factor, refine_scheme)
+    rollout_limit = rollout_for(refine_scheme)
+
     model = RVSDDP.PolicyGraph(
         msppy_hydro_thermal_builder,
         graph;
@@ -152,7 +190,7 @@ end
 
     Random.seed!(seed)
     
-    RVSDDP.train(model; refine_scheme=refine_scheme, parallel=parallel, sampling_scheme=RVSDDP.InSampleMonteCarlo(rollout_limit = i -> 12*i-1), time_limit = time_max, infinite = true, shift_function=shift_function); 
+    RVSDDP.train(model; refine_scheme=refine_scheme, parallel=parallel, sampling_scheme=RVSDDP.InSampleMonteCarlo(; rollout_limit), time_limit = time_max, infinite = true, shift_function=shift_function); 
 
     cuts_data = []
     for (_, node) in model.nodes
@@ -172,20 +210,8 @@ end
     # Créer une DataFrame
     df_cuts = DataFrame(cuts_data)
 
-    folder1 = "results_msppy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)"
-    if !isdir(folder1)
-        mkdir(folder1)
-    end
-
-    folder2 = "$(folder1)/$(discount_factor)"
-    if !isdir(folder2)
-        mkdir(folder2)
-    end
-
-    folder3 = "$(folder1)/$(discount_factor)/seed_$(seed)_time_$(time_max)"
-    if !isdir(folder3)
-        mkdir(folder3)
-    end
+    folder3 = "results_msppy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)"
+    mkpath(folder3)
 
     # Sauvegarder en CSV
     CSV.write("$(folder3)/cuts.csv", df_cuts)
@@ -218,24 +244,12 @@ end
     CSV.write("$(folder3)/approx_values.csv", DataFrame(approx_value_data))
 end
 
-function run_rvsddp_infinite(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, refine_scheme_list)
-    for shift_function in shift_function_list
-        for refine_scheme in refine_scheme_list
-            folder1 = "results_msppy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)"
-            if !isdir(folder1)
-                mkdir(folder1)
-            end
-            for discount_factor in discount_factor_list
-                folder2 = "$(folder1)/$(discount_factor)"
-                if !isdir(folder2)
-                    mkdir(folder2)
-                end
-            end
-        end
-    end
+function run_rvsddp(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, refine_scheme_list)
+    # Les dossiers parents etaient pre-crees ici pour eviter une course entre
+    # workers ; `mkpath` dans le job la tolere desormais.
     combos = [(seed, parallel, time_max, shift_function, discount_factor, refine_scheme) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_scheme in refine_scheme_list]
 
-    results = pmap(combos) do (seed, parallel, time_max, shift_function, discount_factor, refine_scheme)
+    pmap(combos) do (seed, parallel, time_max, shift_function, discount_factor, refine_scheme)
         rvsddp_job(seed, parallel, time_max, shift_function, discount_factor, refine_scheme)
     end
     return 
@@ -243,7 +257,7 @@ end
 
 @everywhere function evaluate_job(folder, time_limit, N, discount_factor)
 
-    TimeHorizon = 12*Int(ceil(log(0.001)/(12*log(discount_factor))))
+    TimeHorizon = PERIOD*Int(ceil(log(0.001)/(PERIOD*log(discount_factor))))
 
     model = RVSDDP.PolicyGraph(
         msppy_hydro_thermal_builder,
@@ -264,14 +278,12 @@ end
             sampling_scheme = RVSDDP.InSampleMonteCarlo(max_depth=TimeHorizon),
         )
     oos_horizon = [sum((discount_factor^(t-1))*simulations[k][t][:stage_objective] for t in 1:TimeHorizon) for k in 1:N]
-    oos_5 = [sum((discount_factor^(t-1))*simulations[k][t][:stage_objective] for t in 1:min(5*12,TimeHorizon)) for k in 1:N]
-    oos_10 = [sum((discount_factor^(t-1))*simulations[k][t][:stage_objective] for t in 1:min(10*12,TimeHorizon)) for k in 1:N]
+    oos_5 = [sum((discount_factor^(t-1))*simulations[k][t][:stage_objective] for t in 1:min(5*PERIOD,TimeHorizon)) for k in 1:N]
+    oos_10 = [sum((discount_factor^(t-1))*simulations[k][t][:stage_objective] for t in 1:min(10*PERIOD,TimeHorizon)) for k in 1:N]
     oos_end_of_horizon = [simulations[k][TimeHorizon][:cost_end_of_horizon] for k in 1:N]
 
     folder_res = "$(folder)/oos"
-    if !isdir(folder_res)
-        mkdir(folder_res)
-    end
+    mkpath(folder_res)
 
     CSV.write("$(folder_res)/oos_horizon_$(time_limit)_$(TimeHorizon)_$N.csv", DataFrame(iteration=1:N, oos_horizon=oos_horizon))
     CSV.write("$(folder_res)/oos_end_of_horizon_$(time_limit)_$(TimeHorizon)_$N.csv", DataFrame(iteration=1:N, oos_end_of_horizon=oos_end_of_horizon))
@@ -283,7 +295,7 @@ end
 function run_evaluate(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, refine_scheme_list, time_list, N_list)
     combos = [("results_msppy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)", time_limit, N, discount_factor) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_scheme in refine_scheme_list for time_limit in time_list for N in N_list]
 
-    results = pmap(combos) do (folder, time_limit, N, discount_factor)
+    pmap(combos) do (folder, time_limit, N, discount_factor)
         evaluate_job(folder, time_limit, N, discount_factor)
     end
     return 
@@ -306,7 +318,7 @@ end
 
         active_cuts = Int.(round.(RVSDDP.count_all_active_cuts(model, 1e-4)))
 
-        for t in 1:12
+        for t in 1:PERIOD
             push!(active_cuts_data, Dict(
                 :time => time_limit,
                 :stage => t,
@@ -322,7 +334,7 @@ end
 function run_active(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, refine_scheme_list, time_list)
     combos = [("results_msppy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)", time_list, discount_factor) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_scheme in refine_scheme_list]
 
-    results = pmap(combos) do (folder, iter, discount_factor)
+    pmap(combos) do (folder, iter, discount_factor)
         active_job(folder, iter, discount_factor)
     end
     return 
@@ -330,7 +342,7 @@ end
 
 @everywhere function X_sharp_job(folder, time_limit, N, discount_factor)
 
-    TimeHorizon = 12*Int(ceil(log(0.001)/(12*log(discount_factor))))
+    TimeHorizon = PERIOD*Int(ceil(log(0.001)/(PERIOD*log(discount_factor))))
 
     model = RVSDDP.PolicyGraph(
         msppy_hydro_thermal_builder,
@@ -351,21 +363,25 @@ end
             sampling_scheme = RVSDDP.InSampleMonteCarlo(max_depth=TimeHorizon),
         )
 
-    oos_points = [simulations[k][t][:state] for k in 1:N for t in 1:TimeHorizon]
+    # Une ligne par (trajectoire, etape). L'etat est encode en JSON comme dans
+    # cuts.csv, puisqu'il porte un champ par variable d'etat.
+    points = [
+        (trajectory = k, stage = t,
+         state = JSON.json(simulations[k][t][:outgoing_state]))
+        for k in 1:N for t in 1:TimeHorizon
+    ]
 
     folder_res = "$(folder)/Xsharp"
-    if !isdir(folder_res)
-        mkdir(folder_res)
-    end
+    mkpath(folder_res)
 
-    CSV.write("$(folder_res)/points_$(time_limit)_$(TimeHorizon)_$N.csv", DataFrame(iteration=1:N, oos_points=oos_points))
+    CSV.write("$(folder_res)/points_$(time_limit)_$(TimeHorizon)_$N.csv", DataFrame(points))
 
 end
 
 function run_X_sharp(seed_list, parallel, time_max, shift_function_list, discount_factor_list, refine_scheme_list, N_list)
-    combos = [("results_msppy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_$(time_max)", time_max, N, discount_factor) for seed in seed_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_scheme in refine_scheme_list for N in N_list]
+    combos = [("results_msppy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)", time_max, N, discount_factor) for seed in seed_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_scheme in refine_scheme_list for N in N_list]
 
-    results = pmap(combos) do (folder, time_limit, N, discount_factor)
+    pmap(combos) do (folder, time_limit, N, discount_factor)
         X_sharp_job(folder, time_limit, N, discount_factor)
     end
     return

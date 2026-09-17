@@ -220,8 +220,10 @@ function _add_cuts(
     reference_iteration::Union{Int,Nothing} = nothing,
 )
     if !isfile("$(folder)/cuts.csv")
-        println("Fichier $folder non trouvé")
-        return
+        # Returning here would leave `model` without a single cut, and the
+        # caller would go on to simulate and write results for an empty policy.
+        # Under `pmap` the message alone would be lost on a worker's stdout.
+        error("Nothing to replay: $(folder)/cuts.csv does not exist.")
     end
     cuts = reconstruct_cuts(CSV.read("$(folder)/cuts.csv", DataFrame))
 
