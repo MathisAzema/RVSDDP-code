@@ -266,7 +266,11 @@ function train(
     end
     # Reset the TimerOutput.
     TimerOutputs.reset_timer!(model.timer_output)
-    log_file_handle = open(log_file, "a")
+    # `print_level = 0` (the default) never writes anything meaningful here
+    # -- every call site below is guarded by it, bar the numerical-stability
+    # report, whose content is itself empty in that case -- so avoid touching
+    # `log_file` on disk unless there is something to write to it.
+    log_file_handle = print_level > 0 ? open(log_file, "a") : IOBuffer()
     log = Log[]
 
     if print_level > 0
