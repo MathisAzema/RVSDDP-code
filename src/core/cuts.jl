@@ -177,11 +177,6 @@ function _update_value_function(
     md_TV = vf.model_TV
     @constraint(md_TV, vf.theta_TV -sum(cut.coefficients[i]*x for (i,x) in vf.states_TV)>=cut.intercept)
 
-    cutTV = Cut3(
-        cut.intercept,
-        cut.coefficients,
-    )
-    push!(node.value_function.cut_TV, cutTV)
     return cutV
 end
 
@@ -273,7 +268,7 @@ function initialize_bellman_function(
     upper_bound < Inf && JuMP.set_upper_bound(Θᴳ, upper_bound)
 
     cV= @constraint(node.value_function.model, node.value_function.theta >= lower_bound)
-    cTV = @constraint(node.value_function.model_TV, node.value_function.theta_TV >= lower_bound)
+    @constraint(node.value_function.model_TV, node.value_function.theta_TV >= lower_bound)
     csp= @constraint(node.subproblem, Θᴳ >= lower_bound)
 
     cutV = Cut2(
@@ -287,14 +282,6 @@ function initialize_bellman_function(
         Dict(i => 0.0 for (i,x) in node.states),
     )
     push!(node.value_function.cut_V, cutV)
-
-    cutTV = Cut3(
-        0.0,
-        Dict{Symbol,Float64}(i => 0.0 for (i,x) in node.states),
-    )
-    push!(node.value_function.cut_TV, cutTV)
-
-
 
     x′ = Dict(key => var.out for (key, var) in node.states)
     return BellmanFunction(ConvexApproximation(Θᴳ, x′))

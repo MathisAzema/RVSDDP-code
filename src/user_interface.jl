@@ -210,11 +210,6 @@ function Cut2(
     )
 end
 
-mutable struct Cut3
-    intercept::Float64
-    coefficients::Dict{Symbol,Float64}
-end
-
 mutable struct Value_Function
     model::JuMP.Model
     cut_V::Vector{Cut2}
@@ -224,7 +219,6 @@ mutable struct Value_Function
     theta_TV::JuMP.VariableRef
     states_TV::Dict{Symbol,JuMP.VariableRef}
     heuristic_state::Dict{Symbol, Float64}
-    cut_TV::Vector{Cut3}
 end
 
 mutable struct Node{T}

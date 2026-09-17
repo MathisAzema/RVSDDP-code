@@ -62,7 +62,6 @@ function initialize_value_function(sense::Symbol, optimizer = nothing)
         theta_TV,
         Dict{Symbol,JuMP.VariableRef}(),
         Dict{Symbol,JuMP.Float64}(),
-        Cut3[],
     )
 end
 
