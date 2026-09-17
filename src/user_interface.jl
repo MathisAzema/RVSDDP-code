@@ -169,7 +169,10 @@ struct State{T}
     out::T
 end
 
-mutable struct Cut2
+# A cut once it has been posted: besides the affine data of the `CandidateCut`
+# it came from, it keeps a handle on every constraint that carries it, so that
+# `apply_shift!` can move them all together.
+mutable struct AttachedCut
     iteration::Int64
     time::Float64
     intercept::Float64
@@ -187,7 +190,7 @@ mutable struct Cut2
 end
 
 # Backwards-compatible constructor for call sites that predate replicas.
-function Cut2(
+function AttachedCut(
     iteration::Int64,
     time::Float64,
     intercept::Float64,
@@ -197,7 +200,7 @@ function Cut2(
     constraint_subproblem::Union{Nothing,JuMP.ConstraintRef},
     state::Dict{Symbol,Float64},
 )
-    return Cut2(
+    return AttachedCut(
         iteration,
         time,
         intercept,
@@ -210,9 +213,9 @@ function Cut2(
     )
 end
 
-mutable struct Value_Function
+mutable struct ValueFunction
     model::JuMP.Model
-    cut_V::Vector{Cut2}
+    cut_V::Vector{AttachedCut}
     theta::JuMP.VariableRef
     states::Dict{Symbol,JuMP.VariableRef}
     model_TV::JuMP.Model
@@ -231,7 +234,7 @@ mutable struct Node{T}
     # shift candidate uniformly in it.
     state_lower_bounds::Dict{Symbol,Float64}
     state_upper_bounds::Dict{Symbol,Float64}
-    value_function::Value_Function
+    value_function::ValueFunction
     constraints::Vector{ConstraintRef}
     # A vector of the child nodes.
     children::Vector{Noise{T}}

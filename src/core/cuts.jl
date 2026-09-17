@@ -4,8 +4,8 @@
 #  obtain one at http://mozilla.org/MPL/2.0/.
 
 # A cut on its way into the model: `_add_cut` builds one, and
-# `_update_value_function` turns it into the `Cut2` that is stored.
-mutable struct Cut
+# `_update_value_function` turns it into the `AttachedCut` that is stored.
+mutable struct CandidateCut
     iteration::Int64
     time::Float64
     intercept::Float64
@@ -67,7 +67,7 @@ function _add_cut(
         θᵏ -= πᵏ[key] * x
     end
     _dynamic_range_warning(θᵏ, πᵏ)
-    cut = Cut(iteration, time, θᵏ, πᵏ, xᵏ)
+    cut = CandidateCut(iteration, time, θᵏ, πᵏ, xᵏ)
     _add_cut_constraint_to_model(model, node, V, cut, shift)
     return
 end
@@ -75,7 +75,7 @@ end
 # Internal: the cut constraints that live in `node`'s own subproblem, in the
 # order they were added. `_replay_cuts_into_replicas!` walks this list to bring
 # a freshly built replica up to date with the master.
-_owned_cuts(node::Node) = get!(() -> Cut2[], node.ext, :owned_cuts)::Vector{Cut2}
+_owned_cuts(node::Node) = get!(() -> AttachedCut[], node.ext, :owned_cuts)::Vector{AttachedCut}
 
 # Internal: add the cut `θ - Σᵢ coefficientsᵢ xᵢ ≥ rhs` (`≤` when maximizing) to
 # `node`'s subproblem and return its constraint reference. This is the same
@@ -102,7 +102,7 @@ function _add_cut_constraint_to_model(
     model::PolicyGraph{T},
     node::Node{T},
     V::ConvexApproximation, 
-    cut::Cut, 
+    cut::CandidateCut, 
     shift::Tuple{Float64, Int64}
 ) where {T}
     mod = JuMP.owner_model(V.theta)
@@ -149,7 +149,7 @@ end
 
 function _update_value_function(
     node::Node{T}, 
-    cut::Cut, 
+    cut::CandidateCut, 
     shift::Tuple{Float64, Int64},
     csp::Union{Nothing, JuMP.ConstraintRef},
     constraint_replicas::Vector{JuMP.ConstraintRef} = JuMP.ConstraintRef[],
@@ -160,7 +160,7 @@ function _update_value_function(
     md_V = vf.model
     cV = @constraint(md_V, vf.theta-sum(cut.coefficients[i]*x for (i,x) in vf.states)>=cut.intercept-shift[1])
     
-    cutV = Cut2(
+    cutV = AttachedCut(
         cut.iteration,
         cut.time,
         cut.intercept,
@@ -271,7 +271,7 @@ function initialize_bellman_function(
     @constraint(node.value_function.model_TV, node.value_function.theta_TV >= lower_bound)
     csp= @constraint(node.subproblem, Θᴳ >= lower_bound)
 
-    cutV = Cut2(
+    cutV = AttachedCut(
         0,
         0.0,
         0.0,

@@ -212,7 +212,7 @@ function _refine_at_initial_point(
 
         iteration = length(options.log)+1
 
-        cut = Cut(iteration, time() - options.start, θᵏ, πᵏ, incoming_state)
+        cut = CandidateCut(iteration, time() - options.start, θᵏ, πᵏ, incoming_state)
 
         _update_value_function(node, cut, shift, nothing)
         record_bellman_residual!(node, incoming_state, items.probability, items.objectives)

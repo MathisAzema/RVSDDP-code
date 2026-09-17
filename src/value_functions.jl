@@ -3,7 +3,7 @@
 #  License, v. 2.0. If a copy of the MPL was not distributed with this
 #  file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-# Everything that surrounds a node's `Value_Function`: how it is built, how it
+# Everything that surrounds a node's `ValueFunction`: how it is built, how it
 # is evaluated, how many of its cuts are active, and how a run saved to CSV is
 # replayed into a fresh model.
 
@@ -53,9 +53,9 @@ function initialize_value_function(sense::Symbol, optimizer = nothing)
         @objective(model_TV, Max, theta_TV)
     end
 
-    return Value_Function(
+    return ValueFunction(
         model,
-        Cut2[],
+        AttachedCut[],
         theta,
         Dict{Symbol,JuMP.VariableRef}(),
         model_TV,
@@ -103,7 +103,7 @@ end
 # ---------------------------------------------------------------------------
 
 # V(x): the cut envelope at its current, shifted position.
-function compute_V(vf::Value_Function, incoming_state::Dict{Symbol,Float64})
+function compute_V(vf::ValueFunction, incoming_state::Dict{Symbol,Float64})
     return maximum([
         cut.intercept - cut.shift[end][1] +
         sum(cut.coefficients[i] * x for (i, x) in incoming_state)
@@ -114,7 +114,7 @@ end
 # The same envelope with the shifts undone, i.e. the cheap lower estimate of
 # T(V)(x) that `random_shift` screens candidates with before
 # paying for a real Bellman evaluation (Proposition 10).
-function compute_approx_TV(vf::Value_Function, incoming_state::Dict{Symbol,Float64})
+function compute_approx_TV(vf::ValueFunction, incoming_state::Dict{Symbol,Float64})
     return maximum([
         cut.intercept + sum(cut.coefficients[i] * x for (i, x) in incoming_state)
         for cut in vf.cut_V
@@ -261,7 +261,7 @@ function _add_cuts(
         cV = @constraint(vf.model, vf.theta - sum(coefficient[i] * x for (i, x) in vf.states) >= intercept - shift[end][1])
         @constraint(vf.model_TV, vf.theta_TV - sum(coefficient[i] * x for (i, x) in vf.states_TV) >= intercept)
         cS = @constraint(model[index].subproblem, V.theta - sum(coefficient[i] * x for (i, x) in V.states) >= intercept - shift[end][1])
-        push!(vf.cut_V, Cut2(cut.iteration, cut.time, intercept, coefficient, shift, cV, cS, state))
+        push!(vf.cut_V, AttachedCut(cut.iteration, cut.time, intercept, coefficient, shift, cV, cS, state))
     end
 
     ref = reference_iteration === nothing ? iteration_max : reference_iteration
@@ -319,7 +319,7 @@ function add_cuts_to_model(
                 cV = @constraint(vf.model, vf.theta - sum(coefficient[i] * x for (i, x) in vf.states) >= intercept)
                 @constraint(vf.model_TV, vf.theta_TV - sum(coefficient[i] * x for (i, x) in vf.states_TV) >= intercept + shift[1])
                 cS = @constraint(model_copy[index].subproblem, V.theta - sum(coefficient[i] * x for (i, x) in V.states) >= intercept)
-                push!(vf.cut_V, Cut2(cut.iteration, cut.time, intercept, coefficient, [shift], cV, cS, cut.state))
+                push!(vf.cut_V, AttachedCut(cut.iteration, cut.time, intercept, coefficient, [shift], cV, cS, cut.state))
             end
         end
     end

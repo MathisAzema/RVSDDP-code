@@ -86,7 +86,7 @@ end
 The index the next cut of `node` will be given.
 
 Shifts are stamped with this index, which is what lets a cut tell later which
-shifts predate it --- see `Cut2.shift` and the cut replay in `_add_cuts`.
+shifts predate it --- see `AttachedCut.shift` and the cut replay in `_add_cuts`.
 """
 next_cut_index(node::Node) = length(node.value_function.cut_V) + 1
 
@@ -109,7 +109,7 @@ function apply_shift!(
     shift::Float64,
 ) where {T}
     effective_from = next_cut_index(node)
-    raised = Cut2[]
+    raised = AttachedCut[]
     for cut in node.value_function.cut_V
         if shift < cut.shift[end][1]
             push!(cut.shift, (shift, effective_from))
