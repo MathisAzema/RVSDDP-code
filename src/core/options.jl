@@ -4,58 +4,20 @@
 #  file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 # `Options` gathers everything a run needs that is not part of the model
-# itself: the algorithmic choices made at the `train` call, the mutable
-# bookkeeping carried across iterations (log, starting states, timings), and
-# the helpers that turn a user-supplied argument into its per-node form.
-
-# to_nodal_form is an internal helper function so users can pass arguments like:
-# risk_measure = RVSDDP.Expectation(),
-# risk_measure = Dict(1=>Expectation(), 2=>WorstCase())
-# risk_measure = (node_index) -> node_index == 1 ? Expectation() : WorstCase()
-# It will return a dictionary with a key for each node_index in the policy
-# graph, and a corresponding value of whatever the user provided.
-function to_nodal_form(model::PolicyGraph{T}, element) where {T}
-    # Note: we don't copy element here, so if element is mutable, you should use
-    # to_nodal_form(model, x -> new_element()) instead. A good example is
-    # Vector{T}; use to_nodal_form(model, i -> T[]).
-    store = Dict{T,typeof(element)}()
-    for node_index in keys(model.nodes)
-        store[node_index] = element
-    end
-    return store
-end
-
-function to_nodal_form(model::PolicyGraph{T}, builder::Function) where {T}
-    store = Dict{T,Any}()
-    for node_index in keys(model.nodes)
-        store[node_index] = builder(node_index)
-    end
-    V = typeof(first(values(store)))
-    for val in values(store)
-        V = promote_type(V, typeof(val))
-    end
-    return Dict{T,V}(key => val for (key, val) in store)
-end
-
-function to_nodal_form(model::PolicyGraph{T}, dict::Dict{T,V}) where {T,V}
-    for key in keys(model.nodes)
-        if !haskey(dict, key)
-            error("Missing key: $(key).")
-        end
-    end
-    return dict
-end
+# itself: the algorithmic choices made at the `train` call and the mutable
+# bookkeeping carried across iterations (log, starting states, timings).
 
 # Internal struct: storage for RVSDDP options and cached data. Users shouldn't
 # interact with this directly.
-struct Options{T}
+struct Options
     # The initial state to start from the root node.
     initial_state::Dict{Symbol,Float64}
     # The sampling scheme to use on the forward pass.
     sampling_scheme::AbstractSamplingScheme
     backward_sampling_scheme::AbstractBackwardSamplingScheme
-    # Risk measure to use at each node.
-    risk_measures::Dict{T,AbstractRiskMeasure}
+    # Risk measure applied at every node. `Expectation` is the only one the
+    # paper uses.
+    risk_measure::AbstractRiskMeasure
     stopping_rules::Vector{AbstractStoppingRule}
     dashboard_callback::Function
     print_level::Int
@@ -78,11 +40,10 @@ struct Options{T}
     refine_scheme::Function
     # Internal function: users should never construct this themselves.
     function Options(
-        model::PolicyGraph{T},
         initial_state::Dict{Symbol,Float64};
         sampling_scheme::AbstractSamplingScheme = InSampleMonteCarlo(),
         backward_sampling_scheme::AbstractBackwardSamplingScheme = CompleteSampler(),
-        risk_measures = Expectation(),
+        risk_measure::AbstractRiskMeasure = Expectation(),
         stopping_rules::Vector{AbstractStoppingRule} = RVSDDP.AbstractStoppingRule[],
         dashboard_callback::Function = (a, b) -> nothing,
         print_level::Int = 0,
@@ -98,12 +59,12 @@ struct Options{T}
         shift_function::Function = RVSDDP.no_shift,
         parallel::Int64 = 1,
         refine_scheme::Function = RVSDDP.refine_all,
-    ) where {T}
-        return new{T}(
+    )
+        return new(
             initial_state,
             sampling_scheme,
             backward_sampling_scheme,
-            to_nodal_form(model, risk_measures),
+            risk_measure,
             stopping_rules,
             dashboard_callback,
             print_level,

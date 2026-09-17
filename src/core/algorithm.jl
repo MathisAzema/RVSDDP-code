@@ -340,11 +340,10 @@ function train(
     end
     dashboard_callback = (::Any, ::Any) -> nothing
     options = Options(
-        model,
         model.initial_root_state;
         sampling_scheme,
         backward_sampling_scheme,
-        risk_measures = risk_measure,
+        risk_measure,
         stopping_rules,
         dashboard_callback,
         print_level,
