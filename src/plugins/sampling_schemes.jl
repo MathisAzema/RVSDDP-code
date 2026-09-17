@@ -7,7 +7,6 @@
 
 struct InSampleMonteCarlo <: AbstractSamplingScheme
     max_depth::Int
-    terminate_on_cycle::Bool
     terminate_on_dummy_leaf::Bool
     rollout_limit::Function
     initial_node::Any
@@ -16,7 +15,6 @@ end
 """
     InSampleMonteCarlo(;
         max_depth::Int = 0,
-        terminate_on_cycle::Function = false,
         terminate_on_dummy_leaf::Function = true,
         rollout_limit::Function = (i::Int) -> typemax(Int),
         initial_node::Any = nothing,
@@ -25,13 +23,12 @@ end
 A Monte Carlo sampling scheme using the in-sample data from the policy graph
 definition.
 
-If `terminate_on_cycle`, terminate the forward pass once a cycle is detected.
 If `max_depth > 0`, return once `max_depth` nodes have been sampled.
 If `terminate_on_dummy_leaf`, terminate the forward pass with 1 - probability of
 sampling a child node.
 
-Note that if `terminate_on_cycle = false` and `terminate_on_dummy_leaf = false`
-then `max_depth` must be set > 0.
+Note that if `terminate_on_dummy_leaf = false` then `max_depth` must be set
+> 0.
 
 Control which node the trajectories start from using `initial_node`. If it is
 left as `nothing`, the root node is used as the starting node.
@@ -42,16 +39,14 @@ You can use `rollout_limit` to set iteration specific depth limits. For example:
 """
 function InSampleMonteCarlo(;
     max_depth::Int = 0,
-    terminate_on_cycle::Bool = false,
     terminate_on_dummy_leaf::Bool = true,
     rollout_limit::Function = i -> typemax(Int),
     initial_node::Any = nothing,
     parallel::Int = 1,
 )
-    if !terminate_on_cycle && !terminate_on_dummy_leaf && max_depth == 0
+    if !terminate_on_dummy_leaf && max_depth == 0
         error(
-            "terminate_on_cycle and terminate_on_dummy_leaf cannot both be " *
-            "false when max_depth=0.",
+            "terminate_on_dummy_leaf cannot be false when max_depth=0.",
         )
     end
     # `i` is incremented from every trajectory of every batch, and since
@@ -67,7 +62,6 @@ function InSampleMonteCarlo(;
     end
     return InSampleMonteCarlo(
         max_depth,
-        terminate_on_cycle,
         terminate_on_dummy_leaf,
         new_rollout,
         initial_node,
@@ -124,9 +118,6 @@ function sample_scenario(
     max_depth = min(sampling_scheme.max_depth, sampling_scheme.rollout_limit())
     # Storage for our scenario. Each tuple is (node_index, noise.term).
     scenario_path = Tuple{T,Any}[]
-    # We only use visited_nodes if terminate_on_cycle=true. Just initialize
-    # anyway.
-    visited_nodes = Set{T}()
     # Begin by sampling a node from the children of the root node.
     node_index = something(
         sampling_scheme.initial_node,
@@ -141,23 +132,15 @@ function sample_scenario(
         # Termination conditions:
         if length(children) == 0
             # 1. Our node has no children, i.e., we are at a leaf node.
-            return scenario_path, false
-        elseif sampling_scheme.terminate_on_cycle && node_index in visited_nodes
-            # 2. terminate_on_cycle = true and we have detected a cycle.
-            return scenario_path, true
+            return scenario_path
         elseif 0 < max_depth <= length(scenario_path)
-            # 3. max_depth > 0 and we have explored max_depth number of nodes.
-            return scenario_path, false
+            # 2. max_depth > 0 and we have explored max_depth number of nodes.
+            return scenario_path
         elseif sampling_scheme.terminate_on_dummy_leaf &&
                rand() < 1 - sum(child.probability for child in children)
-            # 4. we sample a "dummy" leaf node in the next step due to the
+            # 3. we sample a "dummy" leaf node in the next step due to the
             # probability of the child nodes summing to less than one.
-            return scenario_path, false
-        end
-        # We only need to store a list of visited nodes if we want to terminate
-        # due to the presence of a cycle.
-        if sampling_scheme.terminate_on_cycle
-            push!(visited_nodes, node_index)
+            return scenario_path
         end
         # Sample a new node to transition to.
         node_index = sample_noise(children)::T

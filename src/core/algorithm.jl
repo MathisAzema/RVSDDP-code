@@ -5,102 +5,12 @@
 
 # The training loop: one `iteration` is a forward pass followed by a backward
 # pass, and `_training_loop` repeats it until a stopping rule fires. Also holds
-# `Trajectory`, the batch of trial states the two passes exchange, and
-# `calculate_bound`.
-
-# Internal function: calculate the minimum distance between the state `state`
-# and the list of states in `starting_states` using the distance measure `norm`.
-function distance(
-    starting_states::Vector{Dict{Symbol,Float64}},
-    state::Dict{Symbol,Float64},
-    norm::Function = inf_norm,
-)
-    if length(starting_states) == 0
-        return Inf
-    end
-    return minimum(norm.(starting_states, Ref(state)); init = Inf)
-end
-
-# Internal function: the norm to use when checking the distance between two
-# possible starting states. We're going to use: d(x, y) = |x - y| / (1 + |y|).
-function inf_norm(x::Dict{Symbol,Float64}, y::Dict{Symbol,Float64})
-    norm = 0.0
-    for (key, value) in y
-        if abs(x[key] - value) > norm
-            norm = abs(x[key] - value) / (1 + abs(value))
-        end
-    end
-    return norm
-end
-
+# `Trajectory`, the batch of trial states the two passes exchange.
 
 mutable struct Trajectory{T}
     scenario_path::Vector{Tuple{T, Any}}
     sampled_states::Vector{Dict{Symbol,Float64}}
     cumulative_value::Float64
-end
-
-"""
-    RVSDDP.calculate_bound(
-        model::PolicyGraph,
-        state::Dict{Symbol,Float64} = model.initial_root_state;
-        risk_measure::AbstractRiskMeasure = Expectation(),
-    )
-
-Calculate the lower bound (if minimizing, otherwise upper bound) of the problem
-model at the point state, assuming the risk measure at the root node is
-risk_measure.
-"""
-function calculate_bound(
-    model::PolicyGraph{T},
-    root_state::Dict{Symbol,Float64} = model.initial_root_state;
-    risk_measure::AbstractRiskMeasure = Expectation(),
-) where {T}
-    # Initialization.
-    noise_supports = Any[]
-    probabilities = Float64[]
-    objectives = Float64[]
-    # Solve all problems that are children of the root node.
-    for child in model.root_children
-        # It's okay to skip nodes with zero probability.
-        #
-        # See RVSDDP.jl#796 and RVSDDP.jl#797 for more discussion.
-        if isapprox(child.probability, 0.0; atol = 1e-6)
-            continue
-        end
-        node = model[child.term]
-        lock(node.lock)
-        try
-            for noise in node.noise_terms
-                subproblem_results = solve_subproblem(
-                    model,
-                    node,
-                    root_state,
-                    noise.term;
-                    duality_handler = nothing,
-                )
-                push!(objectives, subproblem_results.objective)
-                push!(probabilities, child.probability * noise.probability)
-                push!(noise_supports, noise.term)
-            end
-        finally
-            unlock(node.lock)
-        end
-    end
-    # Now compute the risk-adjusted probability measure:
-    risk_adjusted_probability = similar(probabilities)
-    offset = adjust_probability(
-        risk_measure,
-        risk_adjusted_probability,
-        probabilities,
-        noise_supports,
-        objectives,
-        model.objective_sense == MOI.MIN_SENSE,
-    )
-    # Finally, calculate the risk-adjusted value.
-    return sum(
-        obj * prob for (obj, prob) in zip(objectives, risk_adjusted_probability)
-    ) + offset
 end
 
 struct IterationResult{T}
@@ -126,12 +36,11 @@ function iteration(model::PolicyGraph{T}, options::Options) where {T}
             forward_trajectory,
         )
     end
-    @_timeit_threadsafe model.timer_output "calculate_bound" begin
-        bound = calculate_bound(
-            model;
-            risk_measure = options.root_node_risk_measure,
-        )
-    end
+    # The lower bound reported in the log: V(x0), which `backward_pass` has
+    # just pushed onto `model.approx_value`. Note that the shift mechanism
+    # breaks the lower-bound property, so this is only a valid bound for an
+    # unshifted run.
+    bound = model.approx_value[end][2]
     lock(options.lock)
     try
         push!(
@@ -256,12 +165,6 @@ Train the policy for `model`.
  - `risk_measure`: the risk measure to use at each node. Defaults to
    [`Expectation`](@ref).
 
- -  `root_node_risk_measure::AbstractRiskMeasure`: the risk measure to use at
-    the root node when computing the `Bound` column. Note that the choice of
-    this option does not change the primal policy, and it applies only if the
-    transition from the root node to the first stage is stochastic. Defaults to
-    [`Expectation`](@ref).
-
  - `sampling_scheme`: a sampling scheme to use on the forward pass of the
     algorithm. Defaults to [`InSampleMonteCarlo`](@ref).
 
@@ -281,11 +184,6 @@ Train the policy for `model`.
    `post_iteration_callback(::IterationResult)` that is evaluated after each
    iteration of the algorithm.
 
-There is also a special option for infinite horizon problems
-
- - `cycle_discretization_delta`: the maximum distance between states allowed on
-    the forward pass. This is for advanced users only and needs to be used in
-    conjunction with a different `sampling_scheme`.
 """
 function train(
     model::PolicyGraph;
@@ -300,9 +198,7 @@ function train(
     run_numerical_stability_report::Bool = true,
     stopping_rules = AbstractStoppingRule[],
     risk_measure = RVSDDP.Expectation(),
-    root_node_risk_measure::AbstractRiskMeasure = Expectation(),
     sampling_scheme = RVSDDP.InSampleMonteCarlo(),
-    cycle_discretization_delta::Float64 = 0.0,
     refine_at_similar_nodes::Bool = true,
     backward_sampling_scheme::AbstractBackwardSamplingScheme = RVSDDP.CompleteSampler(),
     forward_pass::AbstractForwardPass = DefaultForwardPass(),
@@ -444,7 +340,6 @@ function train(
         sampling_scheme,
         backward_sampling_scheme,
         risk_measures = risk_measure,
-        cycle_discretization_delta,
         refine_at_similar_nodes,
         stopping_rules,
         dashboard_callback,
@@ -457,7 +352,6 @@ function train(
         duality_handler,
         forward_pass_callback,
         post_iteration_callback,
-        root_node_risk_measure,
         infinite,
         shift_function,
         parallel,

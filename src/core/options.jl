@@ -79,14 +79,8 @@ struct Options{T}
     # The sampling scheme to use on the forward pass.
     sampling_scheme::AbstractSamplingScheme
     backward_sampling_scheme::AbstractBackwardSamplingScheme
-    # Storage for the set of possible sampling states at each node. We only use
-    # this if there is a cycle in the policy graph.
-    starting_states::Dict{T,Vector{Dict{Symbol,Float64}}}
     # Risk measure to use at each node.
     risk_measures::Dict{T,AbstractRiskMeasure}
-    # The delta by which to check if a state is close to a previously sampled
-    # state.
-    cycle_discretization_delta::Float64
     # Flag to add cuts to similar nodes.
     refine_at_similar_nodes::Bool
     # A list of nodes that contain a subset of the children of node i.
@@ -106,7 +100,6 @@ struct Options{T}
     last_log_iteration::Ref{Int}
     # For threading
     lock::ReentrantLock
-    root_node_risk_measure::AbstractRiskMeasure
     #Mathis
     infinite::Bool
     shift_function::Function
@@ -120,7 +113,6 @@ struct Options{T}
         sampling_scheme::AbstractSamplingScheme = InSampleMonteCarlo(),
         backward_sampling_scheme::AbstractBackwardSamplingScheme = CompleteSampler(),
         risk_measures = Expectation(),
-        cycle_discretization_delta::Float64 = 0.0,
         refine_at_similar_nodes::Bool = true,
         stopping_rules::Vector{AbstractStoppingRule} = RVSDDP.AbstractStoppingRule[],
         dashboard_callback::Function = (a, b) -> nothing,
@@ -133,7 +125,6 @@ struct Options{T}
         duality_handler::AbstractDualityHandler = ContinuousConicDuality(),
         forward_pass_callback = x -> nothing,
         post_iteration_callback = result -> nothing,
-        root_node_risk_measure::AbstractRiskMeasure = Expectation(),
         infinite::Bool = false,
         shift_function::Function = RVSDDP.no_shift,
         parallel::Int64 = 1,
@@ -143,9 +134,7 @@ struct Options{T}
             initial_state,
             sampling_scheme,
             backward_sampling_scheme,
-            to_nodal_form(model, x -> Dict{Symbol,Float64}[]),
             to_nodal_form(model, risk_measures),
-            cycle_discretization_delta,
             refine_at_similar_nodes,
             get_same_children(model),
             stopping_rules,
@@ -161,7 +150,6 @@ struct Options{T}
             post_iteration_callback,
             Ref{Int}(0),  # last_log_iteration
             ReentrantLock(),
-            root_node_risk_measure,
             infinite,
             shift_function,
             parallel,

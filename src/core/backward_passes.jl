@@ -218,9 +218,7 @@ function _refine_at_initial_point(
 end
 
 # Internal function: perform a backward pass of the RVSDDP algorithm along the
-# scenario_path, refining the bellman function at sampled_states. Assumes that
-# scenario_path does not end in a leaf node (i.e., the forward pass was solved
-# with include_last_node = false)
+# scenario_path, refining the bellman function at sampled_states.
 function backward_pass(
     model::PolicyGraph{T},
     options::Options,

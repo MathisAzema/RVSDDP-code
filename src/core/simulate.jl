@@ -31,7 +31,7 @@ function _simulate(
     incoming_state::Dict{Symbol,Float64},
 ) where {T}
     # Sample a scenario path.
-    scenario_path, _ = sample_scenario(model, sampling_scheme)
+    scenario_path = sample_scenario(model, sampling_scheme)
 
     # Storage for the simulation results.
     simulation = Dict{Symbol,Any}[]

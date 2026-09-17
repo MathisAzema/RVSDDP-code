@@ -52,13 +52,9 @@ abstract type AbstractSamplingScheme end
 
 Sample a scenario from the policy graph `graph` based on the sampling scheme.
 
-Returns `::Tuple{Vector{Tuple{T, <:Any}}, Bool}`, where the first element is the
-scenario, and the second element is a Boolean flag indicating if the scenario
-was terminated due to the detection of a cycle.
-
-The scenario is a list of tuples (type `Vector{Tuple{T, <:Any}}`) where the
-first component of each tuple is the index of the node, and the second component
-is the stagewise-independent noise term observed in that node.
+Returns the scenario as a list of tuples (type `Vector{Tuple{T, <:Any}}`) where
+the first component of each tuple is the index of the node, and the second
+component is the stagewise-independent noise term observed in that node.
 """
 function sample_scenario end
 
