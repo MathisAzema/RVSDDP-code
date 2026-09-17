@@ -232,7 +232,6 @@ mutable struct Node{T}
     index::T
     # The JuMP subproblem.
     subproblem::JuMP.Model
-    # Mathis.
     # Box of each *outgoing* state variable, keyed as `states` below. Filled by
     # `record_state_bounds!`; `random_shift` samples the random
     # shift candidate uniformly in it.
@@ -265,7 +264,6 @@ mutable struct Node{T}
     lock::ReentrantLock
     # (lower, upper, is_integer)
     incoming_state_bounds::Dict{Symbol,Tuple{Float64,Float64,Bool}}
-    #Mathis
     discount_factor::Float64
     delta::Vector{Float64}
     # Independent copies of this node, one per extra worker of a

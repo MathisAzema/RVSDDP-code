@@ -139,20 +139,8 @@ function run_diagnostic_toy(; n_trials::Int = 1, parallel::Int = 10, iteration_l
         # invalid cut -- which is what a wrong lower bound really means here.
         check_replicas(model_cyclic_sddp)
         println("trial $trial (seed=$trial): lower_bound = $v, total cuts = $total_cuts")
-        # for cut in model_cyclic_sddp.nodes[1].value_function.cut_V
-        #     println("  cut: ", cut)
-        # end
     end
 
-    # med = Statistics.median(results)
-    # anomaly = false
-    # for (trial, v) in enumerate(results)
-    #     if v > 10 * med || v < med / 10
-    #         println("  <<<< ANOMALY at trial $trial: $v vs median $med")
-    #         anomaly = true
-    #     end
-    # end
-    # println(anomaly ? "NOT SAFE: at least one anomalous run." : "No anomaly this run -- call run_diagnostic() a few more times before concluding it's safe.")
     return results
 end
 

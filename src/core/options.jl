@@ -100,7 +100,6 @@ struct Options{T}
     last_log_iteration::Ref{Int}
     # For threading
     lock::ReentrantLock
-    #Mathis
     infinite::Bool
     shift_function::Function
     parallel::Int64

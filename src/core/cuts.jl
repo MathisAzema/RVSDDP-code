@@ -98,7 +98,6 @@ function _add_cut_constraint_to_subproblem(
     return @constraint(mod, expr <= rhs)
 end
 
-#Mathis
 function _add_cut_constraint_to_model(
     model::PolicyGraph{T},
     node::Node{T},
@@ -269,7 +268,6 @@ function initialize_bellman_function(
     if length(node.children) == 0
         lower_bound = upper_bound = 0.0
     end
-    #Mathis
     Θᴳ = @variable(node.subproblem, base_name = "V_"*string(node.index))
     lower_bound > -Inf && JuMP.set_lower_bound(Θᴳ, lower_bound)
     upper_bound < Inf && JuMP.set_upper_bound(Θᴳ, upper_bound)

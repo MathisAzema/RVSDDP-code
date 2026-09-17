@@ -212,8 +212,6 @@ function _refine_at_initial_point(
         record_bellman_residual!(node, incoming_state, items.probability, items.objectives)
         return []
     end
-    # println(new_cuts)
-
     return new_cuts
 end
 

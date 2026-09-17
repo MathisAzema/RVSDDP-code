@@ -45,10 +45,7 @@ end
     # Random variables
     @variable(subproblem, inflow)
     Ω = [20.0, 80.0]
-    # Ω = [40.0]
     P = [1 / length(Ω) for _ in Ω]
-    # Ω = [70.0]
-    # P = [1.0]
     RVSDDP.parameterize(subproblem, Ω, P) do ω
         return JuMP.fix(inflow, ω)
     end

@@ -75,8 +75,6 @@ function _simulate(
                     # TODO: what if the variable container is a dictionary? They
                     # should be using Containers.SparseAxisArray, but this might not
                     # always be the case...
-                    # println("variable: $(variable)")
-                    # println(JuMP.value.(node.subproblem[variable]))
                     store[variable] = JuMP.value.(node.subproblem[variable])
                 elseif skip_undefined_variables
                     store[variable] = NaN

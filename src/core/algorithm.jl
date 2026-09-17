@@ -226,10 +226,6 @@ function train(
     parallel::Int64=1,
     refine_scheme::Function = RVSDDP.refine_all,
 )
-    #Mathis
-    # if infinite
-    #     sampling_scheme = RVSDDP.InSampleMonteCarlo(max_depth=5*length(keys(model.nodes)))
-    # end
     if log_frequency <= 0
         msg = "`log_frequency` must be at least `1`. Got $log_frequency."
         throw(ArgumentError(msg))
