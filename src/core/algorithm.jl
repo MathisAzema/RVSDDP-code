@@ -158,10 +158,6 @@ Train the policy for `model`.
  - `run_numerical_stability_report::Bool`: generate (and print) a numerical
    stability report prior to solve. Defaults to `true`.
 
- - `refine_at_similar_nodes::Bool`: if RVSDDP can detect that two nodes have the
-    same children, it can cheaply add a cut discovered at one to the other. In
-    almost all cases this should be set to `true`.
-
  - `risk_measure`: the risk measure to use at each node. Defaults to
    [`Expectation`](@ref).
 
@@ -213,7 +209,6 @@ function train(
     stopping_rules = AbstractStoppingRule[],
     risk_measure = RVSDDP.Expectation(),
     sampling_scheme = RVSDDP.InSampleMonteCarlo(),
-    refine_at_similar_nodes::Bool = true,
     backward_sampling_scheme::AbstractBackwardSamplingScheme = RVSDDP.CompleteSampler(),
     forward_pass::AbstractForwardPass = DefaultForwardPass(),
     add_to_existing_cuts::Bool = false,
@@ -350,7 +345,6 @@ function train(
         sampling_scheme,
         backward_sampling_scheme,
         risk_measures = risk_measure,
-        refine_at_similar_nodes,
         stopping_rules,
         dashboard_callback,
         print_level,

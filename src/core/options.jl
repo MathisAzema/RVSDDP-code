@@ -46,31 +46,6 @@ function to_nodal_form(model::PolicyGraph{T}, dict::Dict{T,V}) where {T,V}
     return dict
 end
 
-# Internal function: returns a dictionary with a key for each node, where the
-# value is a list of other nodes that contain the same children. This is useful
-# because on the backward pass we can add cuts to nodes with the same children
-# without having to re-solve the children.
-function get_same_children(model::PolicyGraph{T}) where {T}
-    tmp = Dict{Set{T},Set{T}}()
-    for (key, node) in model.nodes
-        children = Set(child.term for child in node.children)
-        if length(children) == 0
-            continue
-        elseif haskey(tmp, children)
-            push!(tmp[children], key)
-        else
-            tmp[children] = Set{T}([key])
-        end
-    end
-    same_children = Dict{T,Vector{T}}(key => T[] for key in keys(model.nodes))
-    for set in values(tmp)
-        for v in set
-            same_children[v] = collect(setdiff(set, Ref(v)))
-        end
-    end
-    return same_children
-end
-
 # Internal struct: storage for RVSDDP options and cached data. Users shouldn't
 # interact with this directly.
 struct Options{T}
@@ -81,10 +56,6 @@ struct Options{T}
     backward_sampling_scheme::AbstractBackwardSamplingScheme
     # Risk measure to use at each node.
     risk_measures::Dict{T,AbstractRiskMeasure}
-    # Flag to add cuts to similar nodes.
-    refine_at_similar_nodes::Bool
-    # A list of nodes that contain a subset of the children of node i.
-    similar_children::Dict{T,Vector{T}}
     stopping_rules::Vector{AbstractStoppingRule}
     dashboard_callback::Function
     print_level::Int
@@ -112,7 +83,6 @@ struct Options{T}
         sampling_scheme::AbstractSamplingScheme = InSampleMonteCarlo(),
         backward_sampling_scheme::AbstractBackwardSamplingScheme = CompleteSampler(),
         risk_measures = Expectation(),
-        refine_at_similar_nodes::Bool = true,
         stopping_rules::Vector{AbstractStoppingRule} = RVSDDP.AbstractStoppingRule[],
         dashboard_callback::Function = (a, b) -> nothing,
         print_level::Int = 0,
@@ -134,8 +104,6 @@ struct Options{T}
             sampling_scheme,
             backward_sampling_scheme,
             to_nodal_form(model, risk_measures),
-            refine_at_similar_nodes,
-            get_same_children(model),
             stopping_rules,
             dashboard_callback,
             print_level,
