@@ -198,29 +198,13 @@ end
     
     RVSDDP.train(model; refine_scheme=refine_scheme, parallel=parallel, sampling_scheme=RVSDDP.InSampleMonteCarlo(; rollout_limit), time_limit = time_max, infinite = true, shift_function=shift_function); 
 
-    cuts_data = []
-    for (_, node) in model.nodes
-        for cut in node.value_function.cut_V
-            push!(cuts_data, Dict(
-                :node => node.index,
-                :iteration => cut.iteration,
-                :time => cut.time,
-                :intercept => cut.intercept,
-                :coefficients => JSON.json(cut.coefficients),
-                :shift => JSON.json(cut.shift),
-                :state => JSON.json(cut.state)
-            ))
-        end
-    end
-
-    # Créer une DataFrame
-    df_cuts = DataFrame(cuts_data)
-
     folder3 = "results_msppy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)"
     mkpath(folder3)
 
-    # Sauvegarder en CSV
-    CSV.write("$(folder3)/cuts.csv", df_cuts)
+    # Ecrit cuts.arrow et shift_events.arrow. Environ sept fois plus compact que
+    # l'ancien cuts.csv, dont les coupes reprenaient le nom des variables d'etat
+    # a chaque ligne et recopiaient l'historique des shifts par coupe.
+    RVSDDP.save_cuts(model, folder3)
 
     delta_data = []
     for (_, node) in model.nodes
@@ -338,6 +322,10 @@ end
                 :time => time_limit,
                 :stage => t,
                 :num_active_cuts => length(active_cuts[t]),
+                # Nombre total de coupes de l'etape a cet instant. Le releve ici
+                # evite d'avoir a relire tout le fichier de coupes pour le
+                # compter au moment de tracer les resultats.
+                :num_cuts => length(model[t].value_function.cut_V),
             ))
         end
     end

@@ -277,28 +277,11 @@ end
 # Replaying a saved run
 # ---------------------------------------------------------------------------
 
-function reconstruct_cuts(df)
-    cuts = []
-    for row in eachrow(df)
-        cut = (
-            iteration = row.iteration,
-            time = row.time,
-            node = row.node,
-            intercept = row.intercept,
-            coefficients = JSON.parse(row.coefficients),
-            shift = JSON.parse(row.shift),
-            state = JSON.parse(row.state),
-        )
-        push!(cuts, cut)
-    end
-    return cuts
-end
-
 """
     _add_cuts(model, folder, keep; reference_iteration)
 
 Replay into `model` the cuts of the run saved under `folder` that satisfy
-`keep(cut)`, rebuilding each one in the three places that hold it: the value
+`keep`, rebuilding each one in the three places that hold it: the value
 function's own model, its unshifted `model_TV` twin, and the *previous* node's
 subproblem (where the cut bounds that node's cost-to-go).
 
@@ -317,6 +300,10 @@ Cuts left out still count towards those positions and towards `limit`, so the
 shift each attached cut is replayed at is the one it would have had in the full
 replay.
 
+`keep` is handed a `(iteration, time, node)` header rather than a whole cut, so
+that deciding what to replay never reads a coefficient, a state or a shift off
+the disk. Only the cuts that survive it, and `select`, are materialised.
+
 The two `_add_cuts_*` entry points below differ only in the first argument.
 """
 function _add_cuts(
@@ -326,46 +313,49 @@ function _add_cuts(
     reference_iteration::Union{Int,Nothing} = nothing,
     select::Union{Nothing,Dict{Int,Set{Int}}} = nothing,
 )
-    if !isfile("$(folder)/cuts.csv")
-        # Returning here would leave `model` without a single cut, and the
-        # caller would go on to simulate and write results for an empty policy.
-        # Under `pmap` the message alone would be lost on a worker's stdout.
-        error("Nothing to replay: $(folder)/cuts.csv does not exist.")
-    end
-    cuts = reconstruct_cuts(CSV.read("$(folder)/cuts.csv", DataFrame))
-
+    source = cut_source(folder)
     T = length(model.nodes)
-    limit = Dict()
+
+    # One pass over the three cheap columns decides what is kept, and with it
+    # how many cuts each node had at that point of the run. No coefficient,
+    # state or shift is materialised here.
+    kept = falses(source.n)
+    limit = Dict{Int,Int}()
     iteration_max = 0
-    for node_index in keys(model.nodes)
-        lim = 0
-        for cut in cuts
-            if keep(cut) && cut.node == node_index
-                lim += 1
-                iteration_max = max(iteration_max, cut.iteration)
-            end
+    for i in 1:source.n
+        header = (
+            iteration = Int(source.iteration[i]),
+            time = Float64(source.time[i]),
+            node = Int(source.node[i]),
+        )
+        if !keep(header)
+            continue
         end
-        limit[node_index] = lim
+        kept[i] = true
+        limit[header.node] = get(limit, header.node, 0) + 1
+        iteration_max = max(iteration_max, header.iteration)
     end
 
     # Position of the cut among the kept cuts of its node, i.e. the index it
     # will have in `cut_V` of a full replay --- the identity `select` uses.
-    rank = Dict(node_index => 0 for node_index in keys(model.nodes))
+    rank = Dict{Int,Int}()
 
-    for cut in cuts
-        if !keep(cut)
+    for i in 1:source.n
+        if !kept[i]
             continue
         end
-        node_index = cut.node
-        rank[node_index] += 1
+        node_index = Int(source.node[i])
+        rank[node_index] = get(rank, node_index, 0) + 1
         # Cut 0 is the lower bound, which a freshly built model already carries.
-        if cut.iteration < 1
+        if Int(source.iteration[i]) < 1
             continue
         end
         if select !== nothing &&
            !(rank[node_index] in get(select, node_index, Set{Int}()))
             continue
         end
+        # Only now, for a cut that really is attached, is the row read out.
+        cut = source.row(i)
         node = model[node_index]
         vf = node.value_function
         index = node.index == 1 ? T : node.index - 1

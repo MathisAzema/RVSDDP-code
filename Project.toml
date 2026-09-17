@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["MathisAzema <az_mathis@orange.fr>"]
 
 [deps]
+Arrow = "69666777-d1a9-59fb-9406-91d4454c9d45"
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
@@ -23,6 +24,7 @@ Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 TimerOutputs = "a759f4b9-e2f1-59dc-863e-4aeb61b1ea8f"
 
 [compat]
+Arrow = "2.8.1"
 CSV = "0.10.16"
 DataFrames = "1.8.2"
 Gurobi = "1.9.3"

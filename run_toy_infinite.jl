@@ -85,41 +85,11 @@ end
     Random.seed!(seed)
     Cuts=RVSDDP.train(model; refine_scheme=refine_scheme, parallel=parallel, sampling_scheme=RVSDDP.InSampleMonteCarlo(rollout_limit = i -> i), iteration_limit = iter_max, infinite = true, shift_function=shift_function); 
 
-    cuts_data = []
-    for (_, node) in model.nodes
-        for cut in node.value_function.cut_V
-            push!(cuts_data, Dict(
-                :node => node.index,
-                :iteration => cut.iteration,
-                :time => cut.time,
-                :intercept => cut.intercept,
-                :coefficients => JSON.json(cut.coefficients),
-                :shift => JSON.json(cut.shift),
-                :state => JSON.json(cut.state)
-            ))
-        end
-    end
+    folder3 = "results_toy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_iter_$(iter_max)"
+    mkpath(folder3)
 
-    # Créer une DataFrame
-    df_cuts = DataFrame(cuts_data)
-
-    folder1 = "results_toy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)"
-    if !isdir(folder1)
-        mkdir(folder1)
-    end
-
-    folder2 = "$(folder1)/$(discount_factor)"
-    if !isdir(folder2)
-        mkdir(folder2)
-    end
-
-    folder3 = "$(folder1)/$(discount_factor)/seed_$(seed)_iter_$(iter_max)"
-    if !isdir(folder3)
-        mkdir(folder3)
-    end
-
-    # Sauvegarder en CSV
-    CSV.write("$(folder3)/cuts.csv", df_cuts)
+    # Voir run_msppy.jl : cuts.arrow + shift_events.arrow.
+    RVSDDP.save_cuts(model, folder3)
 
     delta_data = []
     for (_, node) in model.nodes
@@ -254,6 +224,7 @@ end
                 :time => iter_limit,
                 :stage => t,
                 :num_active_cuts => length(active_cuts[t]),
+                :num_cuts => length(model[t].value_function.cut_V),
             ))
         end
     end

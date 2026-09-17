@@ -10,6 +10,7 @@ import Printf
 import Random
 import Statistics
 import TimerOutputs
+import Arrow
 import CSV
 import DataFrames
 
@@ -54,6 +55,7 @@ include("plugins/backward_sampling_schemes.jl")
 # build, evaluate and replay the nodes' value functions once a run is over.
 
 include("print.jl")
+include("cut_storage.jl")
 include("value_functions.jl")
 
 end
