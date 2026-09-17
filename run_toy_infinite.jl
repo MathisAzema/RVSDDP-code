@@ -83,7 +83,7 @@ end
     )
 
     Random.seed!(seed)
-    Cuts=RVSDDP.train(model; refine_scheme=refine_scheme, parallel=parallel, sampling_scheme=RVSDDP.InSampleMonteCarlo(max_depth=10000000, rollout_limit = i -> i, parallel=parallel), iteration_limit = iter_max, infinite = true, shift_function=shift_function); 
+    Cuts=RVSDDP.train(model; refine_scheme=refine_scheme, parallel=parallel, sampling_scheme=RVSDDP.InSampleMonteCarlo(rollout_limit = i -> i), iteration_limit = iter_max, infinite = true, shift_function=shift_function); 
 
     cuts_data = []
     for (_, node) in model.nodes

@@ -7,7 +7,6 @@
 
 struct InSampleMonteCarlo <: AbstractSamplingScheme
     max_depth::Int
-    terminate_on_dummy_leaf::Bool
     rollout_limit::Function
     initial_node::Any
 end
@@ -15,57 +14,38 @@ end
 """
     InSampleMonteCarlo(;
         max_depth::Int = 0,
-        terminate_on_dummy_leaf::Function = true,
-        rollout_limit::Function = (i::Int) -> typemax(Int),
+        rollout_limit::Function = i -> typemax(Int),
         initial_node::Any = nothing,
     )
 
 A Monte Carlo sampling scheme using the in-sample data from the policy graph
 definition.
 
-If `max_depth > 0`, return once `max_depth` nodes have been sampled.
-If `terminate_on_dummy_leaf`, terminate the forward pass with 1 - probability of
-sampling a child node.
+A trajectory stops at a leaf node or at the depth limit, whichever comes first.
+The depth limit is `min(max_depth, rollout_limit(iteration))`, where
+`max_depth = 0` means "no limit of its own", so the two can be used on their own
+or together:
 
-Note that if `terminate_on_dummy_leaf = false` then `max_depth` must be set
-> 0.
+    InSampleMonteCarlo(max_depth = 120)              # same cap every iteration
+    InSampleMonteCarlo(rollout_limit = i -> 2 * i)   # grows with the iteration
+    InSampleMonteCarlo(max_depth = 120, rollout_limit = i -> 2 * i)  # both
+
+`iteration` is the training iteration the trajectory belongs to, which `train`
+supplies; every trajectory of a given iteration is therefore given the same
+limit, whatever `parallel` is. Outside training (`simulate`) it is 1.
+
+A cyclic graph such as [`InfiniteLinearGraph`](@ref) has no leaf, so one of the
+two limits must be set or the sampling never returns.
 
 Control which node the trajectories start from using `initial_node`. If it is
 left as `nothing`, the root node is used as the starting node.
-
-You can use `rollout_limit` to set iteration specific depth limits. For example:
-
-    InSampleMonteCarlo(rollout_limit = i -> 2 * i)
 """
 function InSampleMonteCarlo(;
     max_depth::Int = 0,
-    terminate_on_dummy_leaf::Bool = true,
     rollout_limit::Function = i -> typemax(Int),
     initial_node::Any = nothing,
-    parallel::Int = 1,
 )
-    if !terminate_on_dummy_leaf && max_depth == 0
-        error(
-            "terminate_on_dummy_leaf cannot be false when max_depth=0.",
-        )
-    end
-    # `i` is incremented from every trajectory of every batch, and since
-    # `options.parallel` trajectories are now solved concurrently across
-    # threads (see forward_passes.jl), this counter must be atomic: a plain
-    # `i += 1` would race and lose increments, breaking the grouping of
-    # `parallel` consecutive calls onto the same `rollout_limit` value.
-    new_rollout = let i = Threads.Atomic{Int}(0)
-        () -> begin
-            new_i = Threads.atomic_add!(i, 1) + 1
-            return rollout_limit(div(new_i + parallel - 1, parallel))
-        end
-    end
-    return InSampleMonteCarlo(
-        max_depth,
-        terminate_on_dummy_leaf,
-        new_rollout,
-        initial_node,
-    )
+    return InSampleMonteCarlo(max_depth, rollout_limit, initial_node)
 end
 
 function get_noise_terms(
@@ -113,9 +93,14 @@ end
 
 function sample_scenario(
     graph::PolicyGraph{T},
-    sampling_scheme::InSampleMonteCarlo,
+    sampling_scheme::InSampleMonteCarlo;
+    iteration::Int = 1,
 ) where {T}
-    max_depth = min(sampling_scheme.max_depth, sampling_scheme.rollout_limit())
+    # `max_depth = 0` means the scheme sets no cap of its own, so the effective
+    # limit is whatever `rollout_limit` allows at this iteration (and vice
+    # versa: the default `rollout_limit` allows everything).
+    cap = sampling_scheme.max_depth == 0 ? typemax(Int) : sampling_scheme.max_depth
+    max_depth = min(cap, sampling_scheme.rollout_limit(iteration))
     # Storage for our scenario. Each tuple is (node_index, noise.term).
     scenario_path = Tuple{T,Any}[]
     # Begin by sampling a node from the children of the root node.
@@ -135,11 +120,6 @@ function sample_scenario(
             return scenario_path
         elseif 0 < max_depth <= length(scenario_path)
             # 2. max_depth > 0 and we have explored max_depth number of nodes.
-            return scenario_path
-        elseif sampling_scheme.terminate_on_dummy_leaf &&
-               rand() < 1 - sum(child.probability for child in children)
-            # 3. we sample a "dummy" leaf node in the next step due to the
-            # probability of the child nodes summing to less than one.
             return scenario_path
         end
         # Sample a new node to transition to.

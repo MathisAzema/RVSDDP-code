@@ -118,9 +118,7 @@ function run_diagnostic_toy(; n_trials::Int = 1, parallel::Int = 10, iteration_l
             refine_scheme = RVSDDP.refine_all,
             parallel = parallel,
             sampling_scheme = RVSDDP.InSampleMonteCarlo(
-                max_depth = 10000,
                 rollout_limit = i -> period * i,
-                parallel = parallel,
             ),
             iteration_limit = iteration_limit,
             infinite = true,

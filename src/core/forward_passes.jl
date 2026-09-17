@@ -31,7 +31,11 @@ function forward_pass(
     scenarios = Vector{Vector{Tuple{T,Any}}}(undef, options.parallel)
     for i in 1:options.parallel
         @_timeit_threadsafe model.timer_output "sample_scenario" begin
-            scenarios[i] = sample_scenario(model, options.sampling_scheme)
+            scenarios[i] = sample_scenario(
+                model,
+                options.sampling_scheme;
+                iteration = length(options.log) + 1,
+            )
         end
     end
     forward_trajectory = Vector{Trajectory{T}}(undef, options.parallel)

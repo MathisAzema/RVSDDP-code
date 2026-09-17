@@ -151,7 +151,7 @@ end
 
     Random.seed!(seed)
     
-    RVSDDP.train(model; refine_scheme=refine_scheme, parallel=parallel, sampling_scheme=RVSDDP.InSampleMonteCarlo(max_depth=10000000, rollout_limit = i -> 12*10-1, parallel=parallel), time_limit = time_max, infinite = true, shift_function=shift_function); 
+    RVSDDP.train(model; refine_scheme=refine_scheme, parallel=parallel, sampling_scheme=RVSDDP.InSampleMonteCarlo(rollout_limit = i -> 12*10-1), time_limit = time_max, infinite = true, shift_function=shift_function); 
 
     cuts_data = []
     for (_, node) in model.nodes

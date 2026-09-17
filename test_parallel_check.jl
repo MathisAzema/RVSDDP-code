@@ -252,9 +252,7 @@ function train_once(; parallel::Int, seed::Int, iterations::Int, shift)
         refine_scheme = RVSDDP.refine_all,
         parallel = parallel,
         sampling_scheme = RVSDDP.InSampleMonteCarlo(
-            max_depth = 10_000,
             rollout_limit = i -> PERIOD * i,
-            parallel = parallel,
         ),
         iteration_limit = iterations,
         infinite = true,

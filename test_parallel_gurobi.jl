@@ -181,9 +181,7 @@ function run_diagnostic(; n_trials::Int = 1, parallel::Int = 2, time_limit::Real
             refine_scheme = RVSDDP.refine_all,
             parallel = parallel,
             sampling_scheme = RVSDDP.InSampleMonteCarlo(
-                max_depth = 30000,
                 rollout_limit = i -> period * i,
-                parallel = parallel,
             ),
             time_limit = time_limit,
             infinite = true,

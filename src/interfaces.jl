@@ -48,9 +48,17 @@ You need to define the following methods:
 abstract type AbstractSamplingScheme end
 
 """
-    sample_scenario(graph::PolicyGraph{T}, ::AbstractSamplingScheme) where {T}
+    sample_scenario(
+        graph::PolicyGraph{T},
+        ::AbstractSamplingScheme;
+        iteration::Int = 1,
+    ) where {T}
 
 Sample a scenario from the policy graph `graph` based on the sampling scheme.
+
+`iteration` is the training iteration the trajectory belongs to; schemes whose
+depth depends on it read it from here. It defaults to 1 for callers outside
+training, such as `simulate`.
 
 Returns the scenario as a list of tuples (type `Vector{Tuple{T, <:Any}}`) where
 the first component of each tuple is the index of the node, and the second
