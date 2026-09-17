@@ -3,6 +3,14 @@
 #  v. 2.0. If a copy of the MPL was not distributed with this file, You can
 #  obtain one at http://mozilla.org/MPL/2.0/.
 
+# The abstract types and the functions that make up each extension point of the
+# algorithm, with no implementation attached. Everything in `plugins/` is an
+# implementation of an interface declared here, as are the shift rules of
+# `core/shifts.jl` and the forward pass of `core/forward_passes.jl`.
+#
+# Keeping the declarations together means a new component can be written
+# against this file alone.
+
 # ================================ risk_measures ============================= #
 
 """

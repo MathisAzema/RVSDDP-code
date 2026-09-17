@@ -1,8 +1,8 @@
 # TEST/DIAGNOSTIC ONLY -- standalone terminal version of the Gurobi
 # thread-safety check, using the small toy problem (notebook_toy.ipynb)
 # instead of the Brazilian model (see test_parallel_gurobi.jl for that one,
-# and the TEST/DIAGNOSTIC ONLY comments in src/algorithm.jl,
-# src/plugins/bellman_functions.jl, src/plugins/forward_passes.jl and
+# and the TEST/DIAGNOSTIC ONLY comments in src/core/algorithm.jl,
+# src/core/cuts.jl, src/core/forward_passes.jl and
 # src/user_interface.jl).
 #
 # Usage: start ONE persistent Julia REPL (not `julia script.jl`, which exits

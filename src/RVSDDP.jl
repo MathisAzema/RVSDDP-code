@@ -15,32 +15,44 @@ import DataFrames
 
 export @stageobjective
 
-# Modelling interface.
+# ============================ Model and interfaces ==========================
+# The objects a user builds (graph, nodes, subproblems) and the abstract types
+# every swappable component of the algorithm is declared against.
+
 include("user_interface.jl")
-
-# Default definitions for RVSDDP related modular utilities.
-include("plugins/headers.jl")
-
-# Tools for overloading JuMP functions
+include("interfaces.jl")
 include("JuMP.jl")
 
-# Printing utilities.
-include("print.jl")
+# ================================= The core =================================
+# RV-SDDP itself. Included in dependency order: `Options` and the subproblem
+# layer first, then the cut machinery, then the training loop, then the two
+# passes and the shift rule they feed.
 
-# The core RVSDDP code.
-include("algorithm.jl")
+include("core/utils.jl")
+include("core/options.jl")
+include("core/subproblems.jl")
+include("core/cuts.jl")
+include("core/algorithm.jl")
+include("core/forward_passes.jl")
+include("core/backward_passes.jl")
+include("core/shifts.jl")
+include("core/simulate.jl")
 
-# Specific plugins.
+# ================================== Plugins =================================
+# Interchangeable implementations of the interfaces declared in
+# `interfaces.jl`, selected through keyword arguments of `train`.
+
 include("plugins/risk_measures.jl")
 include("plugins/sampling_schemes.jl")
-include("plugins/bellman_functions.jl")
-include("plugins/shifts.jl")
 include("plugins/stopping_rules.jl")
 include("plugins/duality_handlers.jl")
 include("plugins/backward_sampling_schemes.jl")
-include("plugins/forward_passes.jl")
 
-# Building, evaluating and replaying the nodes' value functions.
+# =========================== Results and reporting ==========================
+# The training log and the numerical-stability report, then the tools that
+# build, evaluate and replay the nodes' value functions once a run is over.
+
+include("print.jl")
 include("value_functions.jl")
 
 end

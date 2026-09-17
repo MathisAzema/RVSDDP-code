@@ -93,13 +93,15 @@ next_cut_index(node::Node) = length(node.value_function.cut_V) + 1
 """
     apply_shift!(model, node, shift)
 
-Lower every cut of `node` to the level `shift`, and stamp that level into each
-cut's shift history.
+Bring the effective shift of every cut of `node` down to `shift`, wherever the
+cut currently carries a larger one, and stamp the new level into its shift
+history.
 
-A cut is only ever moved *down*, so its effective shift is the smallest one
-selected since it was created: a small `shift` raises all earlier cuts back
-towards their unshifted position, while cuts created later are untouched. This
-is why a rule shifts the whole cut collection and not just the newest cut.
+The direction is easy to get backwards. A cut is stored at `intercept - shift`,
+so *reducing* its shift moves the cut itself back *up*, towards the unshifted
+position it was generated at. A cut's effective shift is therefore the smallest
+one selected since it was created, which is why a rule has to revisit the whole
+cut collection and not just the newest cut.
 """
 function apply_shift!(
     model::PolicyGraph{T},
@@ -107,7 +109,7 @@ function apply_shift!(
     shift::Float64,
 ) where {T}
     effective_from = next_cut_index(node)
-    lowered = Cut2[]
+    raised = Cut2[]
     for cut in node.value_function.cut_V
         if shift < cut.shift[end][1]
             push!(cut.shift, (shift, effective_from))
@@ -115,16 +117,16 @@ function apply_shift!(
             if cut.constraint_subproblem !== nothing
                 set_normalized_rhs(cut.constraint_subproblem, cut.intercept - shift)
             end
-            push!(lowered, cut)
+            push!(raised, cut)
         end
     end
-    # Bring the replicas' copies of those cuts down to the same level. Task `r`
+    # Mirror the same move onto the replicas' copies of those cuts. Task `r`
     # only ever touches replica `r`, so the refreshes run concurrently. This
     # matters because a shift can touch every cut generated so far.
-    if !isempty(lowered)
-        n_replicas = maximum(length(cut.constraint_replicas) for cut in lowered)
+    if !isempty(raised)
+        n_replicas = maximum(length(cut.constraint_replicas) for cut in raised)
         _parallel_foreach(n_replicas) do r
-            for cut in lowered
+            for cut in raised
                 if r <= length(cut.constraint_replicas)
                     set_normalized_rhs(
                         cut.constraint_replicas[r],
@@ -165,16 +167,11 @@ end
 
 shift_label(::typeof(no_shift)) = "cyclic_sddp"
 
-# How much better the random candidate must be able to do before its exact
-# Bellman value is worth an LP per noise. Screening against the incumbent minus
-# this margin keeps the rule from paying for a candidate that can only tie.
-const _SCREENING_MARGIN = 1e-4
-
-# Draw one state uniformly in the node's state box. The keys are taken from
-# `like` so that the drawn state matches the trial states exactly.
-function _random_state_in_box(node::Node, like::Dict{Symbol,Float64})
+# Draw one state uniformly in the node's state box, keyed by the node's own state
+# variables.
+function _random_state_in_box(node::Node)
     state = Dict{Symbol,Float64}()
-    for (key, _) in like
+    for key in keys(node.states)
         lower = node.state_lower_bounds[key]
         upper = node.state_upper_bounds[key]
         state[key] = rand() * (upper - lower) + lower
@@ -217,10 +214,10 @@ function random_shift(
     shift = minimum(trial_residuals)
 
     # Candidate n+1: a uniform draw in the state box, screened before solving.
-    candidate = _random_state_in_box(node, trial_states[1])
+    candidate = _random_state_in_box(node)
     V_candidate = compute_V(node.value_function, candidate)
     residual_bound = compute_approx_TV(node.value_function, candidate) - V_candidate
-    if residual_bound <= shift - _SCREENING_MARGIN
+    if residual_bound < shift
         shift = min(shift, compute_TV(node, candidate) - V_candidate)
     end
 
