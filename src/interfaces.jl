@@ -227,6 +227,51 @@ Defaults to the function's name, so a new rule works without defining one.
 """
 function shift_label end
 
+# =========================== refinement schemes ============================= #
+
+"""
+    refine_scheme(scenario_length::Int, period::Int)
+
+The interface for a refinement scheme, passed as `train(; refine_scheme = ...)`.
+
+Called once at the start of each backward pass. Returns the levels of the
+forward pass that receive a cut, as an ordered collection of integers; level `0`
+denotes the initial state `x0`, and level `i >= 1` the `i`-th trial state.
+
+The first `period` levels it returns are also the ones whose Bellman residual is
+recorded, so that each phase contributes exactly one residual per iteration.
+
+See [`RVSDDP.refine_all`](@ref) and [`RVSDDP.refine_periodic`](@ref) for the two
+schemes shipped here.
+"""
+function refine_scheme end
+
+"""
+    refine_label(scheme)::String
+
+The short name a refinement scheme is known by in the results directories,
+defined in `refinement_schemes.jl` alongside the scheme itself. Combined with
+[`RVSDDP.shift_label`](@ref) by [`RVSDDP.method_label`](@ref).
+
+An empty label means the scheme adds nothing to the method name, which is how
+scheme `A` stays plain `RVSDDP` while scheme `B` becomes `periodic_RVSDDP`.
+
+Defaults to the function's name, so a new scheme works without defining one.
+"""
+function refine_label end
+
+"""
+    method_label(shift_function, refine_scheme)::String
+
+The directory name a (shift rule, refinement scheme) pair is stored under. The
+run scripts build their paths with it:
+
+```julia
+folder = "results_toy/\$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_\$(parallel)"
+```
+"""
+function method_label end
+
 # ============================= parallel schemes ============================= #
 
 # ============================= forward pass ============================= #

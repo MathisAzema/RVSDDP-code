@@ -249,7 +249,7 @@ function train_once(; parallel::Int, seed::Int, iterations::Int, shift)
     Random.seed!(seed)
     RVSDDP.train(
         model;
-        refine_mode = 0,
+        refine_scheme = RVSDDP.refine_all,
         parallel = parallel,
         sampling_scheme = RVSDDP.InSampleMonteCarlo(
             max_depth = 10_000,

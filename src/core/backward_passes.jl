@@ -217,8 +217,6 @@ function _refine_at_initial_point(
     return new_cuts
 end
 
-# Internal function: perform a backward pass of the RVSDDP algorithm along the
-# scenario_path, refining the bellman function at sampled_states.
 function backward_pass(
     model::PolicyGraph{T},
     options::Options,
@@ -227,13 +225,8 @@ function backward_pass(
     scenario_length = length(trajectory[1].scenario_path)
     period= length(model.nodes)
 
-    if options.refine_mode == 0
-        index_to_refine = 0:scenario_length-1
-    else
-        index_rand = rand(1:Int(round(scenario_length/period)))
-        index_to_refine = (index_rand-1)*period:index_rand*period-1
-    end
-    # TODO(odow): improve storage type.
+    index_to_refine = options.refine_scheme(scenario_length, period)
+    last_residual_level = minimum(index_to_refine) + period - 1
     cuts = Dict{T,Vector{Any}}(index => Any[] for index in keys(model.nodes))
     for index in scenario_length:-1:1
         node_index, _ = trajectory[1].scenario_path[index]
@@ -267,7 +260,7 @@ function backward_pass(
             # replica), so they have to be added one at a time.
             next_node = model[node.children[1].term]
             shift=options.shift_function(model, next_node, items_traj, outgoing_states)
-            if index <= length(model.nodes)-1 || options.refine_mode == 1
+            if index <= last_residual_level
                 outgoing_state = outgoing_states[1]
                 items = items_traj[1]
                 record_bellman_residual!(next_node, outgoing_state, items.probability, items.objectives)

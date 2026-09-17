@@ -105,7 +105,7 @@ struct Options{T}
     shift_function::Function
     parallel::Int64
     start::Float64
-    refine_mode::Int64
+    refine_scheme::Function
     # Internal function: users should never construct this themselves.
     function Options(
         model::PolicyGraph{T},
@@ -128,7 +128,7 @@ struct Options{T}
         infinite::Bool = false,
         shift_function::Function = RVSDDP.no_shift,
         parallel::Int64 = 1,
-        refine_mode::Int64 = 0,
+        refine_scheme::Function = RVSDDP.refine_all,
     ) where {T}
         return new{T}(
             initial_state,
@@ -154,7 +154,7 @@ struct Options{T}
             shift_function,
             parallel,
             time(),
-            refine_mode,
+            refine_scheme,
         )
     end
 end

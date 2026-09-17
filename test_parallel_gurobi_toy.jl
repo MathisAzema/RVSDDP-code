@@ -115,7 +115,7 @@ function run_diagnostic_toy(; n_trials::Int = 1, parallel::Int = 10, iteration_l
         Random.seed!(trial)
         RVSDDP.train(
             model_cyclic_sddp;
-            refine_mode = 0,
+            refine_scheme = RVSDDP.refine_all,
             parallel = parallel,
             sampling_scheme = RVSDDP.InSampleMonteCarlo(
                 max_depth = 10000,

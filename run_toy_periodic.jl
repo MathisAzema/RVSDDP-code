@@ -75,7 +75,7 @@ end
 
 @everywhere using CSV, DataFrames, JSON
 
-@everywhere function rvsddp_periodic_job(seed, parallel, time_max, shift_function, discount_factor, refine_mode)
+@everywhere function rvsddp_periodic_job(seed, parallel, time_max, shift_function, discount_factor, refine_scheme)
     model = RVSDDP.PolicyGraph(
         subproblem_builder,
         graph;
@@ -86,7 +86,7 @@ end
     )
 
     Random.seed!(seed)
-    Cuts=RVSDDP.train(model; refine_mode=refine_mode, parallel=parallel, sampling_scheme=RVSDDP.InSampleMonteCarlo(max_depth=10000000, rollout_limit = i -> 1*10-1, parallel=parallel), time_limit = time_max, infinite = true, shift_function=shift_function); 
+    Cuts=RVSDDP.train(model; refine_scheme=refine_scheme, parallel=parallel, sampling_scheme=RVSDDP.InSampleMonteCarlo(max_depth=10000000, rollout_limit = i -> 1*10-1, parallel=parallel), time_limit = time_max, infinite = true, shift_function=shift_function); 
 
     cuts_data = []
     for (_, node) in model.nodes
@@ -106,7 +106,7 @@ end
     # Créer une DataFrame
     df_cuts = DataFrame(cuts_data)
 
-    folder1 = "results_toy/$(RVSDDP.shift_label(shift_function))_$(refine_mode)_parallel_$(parallel)"
+    folder1 = "results_toy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)"
     if !isdir(folder1)
         mkdir(folder1)
     end
@@ -148,10 +148,10 @@ end
     CSV.write("$(folder3)/approx_values.csv", DataFrame(approx_value_data))
 end
 
-function run_toy_periodic(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, refine_mode_list)
+function run_toy_periodic(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, refine_scheme_list)
     for shift_function in shift_function_list
-        for refine_mode in refine_mode_list
-            folder1 = "results_toy/$(RVSDDP.shift_label(shift_function))_$(refine_mode)_parallel_$(parallel)"
+        for refine_scheme in refine_scheme_list
+            folder1 = "results_toy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)"
             if !isdir(folder1)
                 mkdir(folder1)
             end
@@ -164,10 +164,10 @@ function run_toy_periodic(seed_list, parallel, time_max_list, shift_function_lis
         end
     end
 
-    combos = [(seed, parallel, time_max, shift_function, discount_factor, refine_mode) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list]
+    combos = [(seed, parallel, time_max, shift_function, discount_factor, refine_scheme) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_scheme in refine_scheme_list]
 
-    results = pmap(combos) do (seed, parallel, time_max, shift_function, discount_factor, refine_mode)
-        rvsddp_periodic_job(seed, parallel, time_max, shift_function, discount_factor, refine_mode)
+    results = pmap(combos) do (seed, parallel, time_max, shift_function, discount_factor, refine_scheme)
+        rvsddp_periodic_job(seed, parallel, time_max, shift_function, discount_factor, refine_scheme)
     end
     return 
 end
@@ -212,8 +212,8 @@ end
 
 end
 
-function run_evaluate(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, time_list, refine_mode_list, N_list)
-    combos = [("results_toy/$(RVSDDP.shift_label(shift_function))_$(refine_mode)_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)", time_limit, N, discount_factor) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_mode in refine_mode_list for time_limit in time_list for N in N_list]
+function run_evaluate(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, time_list, refine_scheme_list, N_list)
+    combos = [("results_toy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)", time_limit, N, discount_factor) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_scheme in refine_scheme_list for time_limit in time_list for N in N_list]
 
     results = pmap(combos) do (folder, time_limit, N, discount_factor)
         evaluate_job(folder, time_limit, N, discount_factor)

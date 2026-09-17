@@ -185,7 +185,7 @@ function run_diagnostic(; n_trials::Int = 1, parallel::Int = 2, time_limit::Real
         start = time()
         RVSDDP.train(
             model_cyclic_sddp;
-            refine_mode = 0,
+            refine_scheme = RVSDDP.refine_all,
             parallel = parallel,
             sampling_scheme = RVSDDP.InSampleMonteCarlo(
                 max_depth = 30000,

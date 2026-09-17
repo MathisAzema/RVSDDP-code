@@ -184,6 +184,20 @@ Train the policy for `model`.
    `post_iteration_callback(::IterationResult)` that is evaluated after each
    iteration of the algorithm.
 
+The two choices that make up a method of the computational experiments:
+
+ - `shift_function`: the shift-selection rule. Defaults to
+   [`RVSDDP.no_shift`](@ref), which reduces RV-SDDP to cyclic SDDP; use
+   [`RVSDDP.random_shift`](@ref) for RV-SDDP proper.
+
+ - `refine_scheme`: which trial states of the forward pass receive a cut.
+   Defaults to [`RVSDDP.refine_all`](@ref), i.e. every visited state (scheme
+   `A`); use [`RVSDDP.refine_periodic`](@ref) for one random block of `T`
+   consecutive stages per iteration (scheme `B`).
+
+[`RVSDDP.method_label`](@ref) turns that pair into the name the results are
+stored under.
+
 """
 function train(
     model::PolicyGraph;
@@ -210,7 +224,7 @@ function train(
     discount_factor::Float64=0.1,
     shift_function::Function=RVSDDP.no_shift,
     parallel::Int64=1,
-    refine_mode::Int64=0,
+    refine_scheme::Function = RVSDDP.refine_all,
 )
     #Mathis
     # if infinite
@@ -355,7 +369,7 @@ function train(
         infinite,
         shift_function,
         parallel,
-        refine_mode,
+        refine_scheme,
     )
     status = :not_solved
     try

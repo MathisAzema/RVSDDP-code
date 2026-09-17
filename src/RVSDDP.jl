@@ -36,6 +36,7 @@ include("core/algorithm.jl")
 include("core/forward_passes.jl")
 include("core/backward_passes.jl")
 include("core/shifts.jl")
+include("core/refinement_schemes.jl")
 include("core/simulate.jl")
 
 # ================================== Plugins =================================
