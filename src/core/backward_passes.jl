@@ -130,10 +130,16 @@ function solve_all_children(
     return
 end
 
+# Internal function: generate the cut at the initial state x0, which
+# `backward_pass` does once per iteration whatever the refinement scheme.
+#
+# Unlike the levels of the forward pass, this one is not batched: every
+# trajectory of a `parallel > 1` batch starts from the same x0, so solving the
+# children once is enough -- a batch would only produce `parallel` identical
+# cuts. The shift is therefore computed from a batch of one.
 function _refine_at_initial_point(
     model::PolicyGraph{T},
     options::Options,
-
 ) where {T}
     if options.infinite
         node_index = length(model.nodes)
@@ -224,7 +230,14 @@ function backward_pass(
     period= length(model.nodes)
 
     index_to_refine = options.refine_scheme(scenario_length, period)
-    last_residual_level = minimum(index_to_refine) + period - 1
+    # One Bellman residual per phase per iteration. The refinement at x0 below
+    # always records the one for the first phase, so the loop covers the other
+    # `period - 1` phases, i.e. the first `period - 1` refined levels.
+    # (`index_to_refine` is empty when the forward pass is too short to hold a
+    # level, e.g. `refine_all` on a pass of length 1; the loop below then does
+    # nothing and only the refinement at x0 runs.)
+    first_level = isempty(index_to_refine) ? 1 : minimum(index_to_refine)
+    last_residual_level = first_level + period - 2
     cuts = Dict{T,Vector{Any}}(index => Any[] for index in keys(model.nodes))
     for index in scenario_length:-1:1
         node_index, _ = trajectory[1].scenario_path[index]
@@ -285,10 +298,12 @@ function backward_pass(
             end
         end
     end
-    if 0 in index_to_refine
-        new_cuts_0 = _refine_at_initial_point(model, options)
-        push!(cuts[length(model.nodes)], new_cuts_0)
-    end
+    # The cut at the initial state is generated at every iteration, whatever the
+    # refinement scheme: it is what puts x0 in the stable set, which the
+    # convergence analysis needs. It is deliberately not batched, see
+    # `_refine_at_initial_point`.
+    new_cuts_0 = _refine_at_initial_point(model, options)
+    push!(cuts[length(model.nodes)], new_cuts_0)
     push!(model.approx_value, (time()-options.start, compute_approx_value(model)))
     return cuts
 end

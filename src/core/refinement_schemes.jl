@@ -6,6 +6,10 @@
 # Which of the trial states visited by the forward pass receive a cut on the way
 # back. This is the "Fw/Bw scheme" axis of the computational experiments, the
 # second choice a method is made of, alongside the shift rule of `shifts.jl`.
+#
+# A scheme only chooses among the states the forward pass actually visited,
+# levels `1` to `scenario_length`. The cut at the initial state x0 is not one of
+# them: `backward_pass` generates it at every iteration regardless of the scheme.
 
 # Each scheme below is followed by the short name its results directory is built
 # from (see `refine_label` in interfaces.jl). A scheme that defines no label
@@ -16,28 +20,33 @@ refine_label(scheme::Function) = string(scheme)
     refine_all(scenario_length::Int, period::Int)
 
 Refine at every state visited by the forward pass, which is scheme `A` of the
-computational experiments: a forward pass of length `L(k)` yields `L(k)` cuts.
+computational experiments: with the cut at x0 that `backward_pass` always adds,
+a forward pass of length `L(k)` yields `L(k)` cuts.
 
 This is the scheme the convergence analysis covers, provided `L(k) → ∞`.
 """
-refine_all(scenario_length::Int, period::Int) = 0:(scenario_length-1)
+refine_all(scenario_length::Int, period::Int) = 1:(scenario_length-1)
 
 refine_label(::typeof(refine_all)) = ""
 
 """
     refine_periodic(scenario_length::Int, period::Int)
 
-Refine one block of `period` consecutive levels, drawn uniformly among the
-blocks the forward pass contains. This is scheme `B`, following the periodic
+Refine one block of `period` consecutive visited states, drawn uniformly among
+the blocks the forward pass contains. This is scheme `B`, following the periodic
 approach of Shapiro and Ding: whatever the length of the forward pass, an
-iteration produces exactly `period` cuts, one per phase.
+iteration produces `period` cuts from the block, one per phase, plus the cut at
+x0 that `backward_pass` always adds.
+
+If the forward pass is shorter than one period it holds no complete block, and
+every visited state is refined.
 
 Note that a fixed forward-pass length does not meet the `L(k) → ∞` condition of
 the convergence theorem, so this scheme is an empirical baseline.
 """
 function refine_periodic(scenario_length::Int, period::Int)
-    block = rand(1:round(Int, scenario_length / period))
-    return ((block-1)*period):(block*period-1)
+    block = rand(1:max(1, div(scenario_length, period)))
+    return ((block-1)*period+1):(block*period)
 end
 
 refine_label(::typeof(refine_periodic)) = "periodic"

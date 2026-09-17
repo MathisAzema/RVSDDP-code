@@ -235,11 +235,17 @@ function shift_label end
 The interface for a refinement scheme, passed as `train(; refine_scheme = ...)`.
 
 Called once at the start of each backward pass. Returns the levels of the
-forward pass that receive a cut, as an ordered collection of integers; level `0`
-denotes the initial state `x0`, and level `i >= 1` the `i`-th trial state.
+forward pass that receive a cut, as an ordered collection of integers: level `i`
+is the `i`-th state the forward pass visited, so a scheme chooses within
+`1:scenario_length`.
 
-The first `period` levels it returns are also the ones whose Bellman residual is
-recorded, so that each phase contributes exactly one residual per iteration.
+The initial state `x0` is not one of those levels. `backward_pass` refines there
+at every iteration whatever the scheme returns, because that is what puts `x0`
+in the stable set of the convergence analysis.
+
+The first `period - 1` levels it returns are also the ones whose Bellman
+residual is recorded; the refinement at `x0` records the remaining one, so that
+each phase contributes exactly one residual per iteration.
 
 See [`RVSDDP.refine_all`](@ref) and [`RVSDDP.refine_periodic`](@ref) for the two
 schemes shipped here.

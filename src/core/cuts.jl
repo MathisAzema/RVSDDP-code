@@ -418,11 +418,6 @@ function _add_average_cut(
 end
 
 
-# If we are adding a multi-cut for the first time, then the local θ variables
-# won't have been added.
-# TODO(odow): a way to set different bounds for each variable in the multi-cut.
-
-
 function compute_approx_value(
     model::PolicyGraph{T},
 ) where {T}
