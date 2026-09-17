@@ -154,8 +154,8 @@ function check_replicas(
 end
 
 # Incoming states at which to compare a node with its replicas. The
-# state box comes from the master's `two_stage` bounds (replicas do not build
-# one); the initial state is always included because it is the point the bound
+# state box comes from the master's recorded state bounds (replicas do not have
+# them); the initial state is always included because it is the point the bound
 # is reported at.
 function _replica_probe_states(
     model::RVSDDP.PolicyGraph{T},
@@ -172,8 +172,8 @@ function _replica_probe_states(
     for _ in 1:n_points
         state = Dict{Symbol,Float64}()
         for k in keys_
-            lower = get(node.two_stage.lower_bounds, k, NaN)
-            upper = get(node.two_stage.upper_bounds, k, NaN)
+            lower = get(node.state_lower_bounds, k, NaN)
+            upper = get(node.state_upper_bounds, k, NaN)
             state[k] = if isfinite(lower) && isfinite(upper)
                 lower + rand(rng) * (upper - lower)
             else

@@ -12,39 +12,6 @@ struct Graph{T}
     # A partition of the nodes into ambiguity sets.
 end
 
-"""
-    Graph(root_node::T) where T
-
-Create an empty graph struture with the root node `root_node`.
-
-## Example
-
-```jldoctest
-julia> graph = RVSDDP.Graph(0)
-Root
- 0
-Nodes
- {}
-Arcs
- {}
-
-julia> graph = RVSDDP.Graph(:root)
-Root
- root
-Nodes
- {}
-Arcs
- {}
-
-julia> graph = RVSDDP.Graph((0, 0))
-Root
- (0, 0)
-Nodes
- {}
-Arcs
- {}
-```
-"""
 function Graph(root_node::T) where {T}
     return Graph{T}(
         root_node,
@@ -108,41 +75,6 @@ function _validate_graph(graph::Graph)
     return
 end
 
-"""
-    add_node(graph::Graph{T}, node::T) where {T}
-
-Add a node to the graph `graph`.
-
-## Examples
-
-```jldoctest
-julia> graph = RVSDDP.Graph(:root);
-
-julia> RVSDDP.add_node(graph, :A)
-
-julia> graph
-Root
- root
-Nodes
- A
-Arcs
- {}
-```
-
-```jldoctest
-julia> graph = RVSDDP.Graph(0);
-
-julia> RVSDDP.add_node(graph, 2)
-
-julia> graph
-Root
- 0
-Nodes
- 2
-Arcs
- {}
-```
-"""
 function add_node(graph::Graph{T}, node::T) where {T}
     if haskey(graph.nodes, node) || node == graph.root_node
         error("Node $(node) already exists!")
@@ -156,45 +88,6 @@ function add_node(graph::Graph{T}, node) where {T}
 end
 
 
-"""
-    add_edge(graph::Graph{T}, edge::Pair{T, T}, probability::Float64) where {T}
-
-Add an edge to the graph `graph`.
-
-## Examples
-
-```jldoctest
-julia> graph = RVSDDP.Graph(0);
-
-julia> RVSDDP.add_node(graph, 1)
-
-julia> RVSDDP.add_edge(graph, 0 => 1, 0.9)
-
-julia> graph
-Root
- 0
-Nodes
- 1
-Arcs
- 0 => 1 w.p. 0.9
-```
-
-```jldoctest
-julia> graph = RVSDDP.Graph(:root);
-
-julia> RVSDDP.add_node(graph, :A)
-
-julia> RVSDDP.add_edge(graph, :root => :A, 1.0)
-
-julia> graph
-Root
- root
-Nodes
- A
-Arcs
- root => A w.p. 1.0
-```
-"""
 function add_edge(
     graph::Graph{T},
     edge::Pair{T,T},
@@ -230,23 +123,7 @@ end
 """
     LinearGraph(stages::Int)
 
-Create a linear graph with `stages` number of nodes.
-
-## Examples
-
-```jldoctest
-julia> graph = RVSDDP.LinearGraph(3)
-Root
- 0
-Nodes
- 1
- 2
- 3
-Arcs
- 0 => 1 w.p. 1.0
- 1 => 2 w.p. 1.0
- 2 => 3 w.p. 1.0
-```
+A finite horizon of `stages` stages: `0 -> 1 -> ... -> stages`, with no arc back.
 """
 function LinearGraph(stages::Int)
     edges = Tuple{Pair{Int,Int},Float64}[]
@@ -256,7 +133,13 @@ function LinearGraph(stages::Int)
     return Graph(0, collect(1:stages), edges)
 end
 
-#Mathis
+"""
+    InfiniteLinearGraph(stages::Int)
+
+The `T`-periodic infinite horizon this package is built for: `stages` nodes in a
+line, plus an arc from the last back to the first. That wrap-around is what makes
+the horizon never terminate, and what `train(; infinite = true)` expects.
+"""
 function InfiniteLinearGraph(stages::Int)
     edges = Tuple{Pair{Int,Int},Float64}[]
     for t in 1:stages
@@ -284,15 +167,6 @@ struct State{T}
     in::T
     # The outgoing state variable.
     out::T
-end
-
-mutable struct TwoStage
-    model::JuMP.Model
-    non_anticipative_variables::Dict{Symbol, VariableRef}
-    states::Dict{Symbol, Vector{VariableRef}}
-    bellman_variables::Vector{VariableRef}
-    lower_bounds::Dict{Symbol, Float64}
-    upper_bounds::Dict{Symbol, Float64}
 end
 
 mutable struct Cut2
@@ -359,9 +233,12 @@ mutable struct Node{T}
     # The JuMP subproblem.
     subproblem::JuMP.Model
     # Mathis.
-    two_stage::TwoStage
+    # Box of each *outgoing* state variable, keyed as `states` below. Filled by
+    # `record_state_bounds!`; `shift_update_random_forward` samples the random
+    # shift candidate uniformly in it.
+    state_lower_bounds::Dict{Symbol,Float64}
+    state_upper_bounds::Dict{Symbol,Float64}
     value_function::Value_Function
-    states_two_stage::Dict{Symbol,VariableRef}
     constraints::Vector{ConstraintRef}
     # A vector of the child nodes.
     children::Vector{Noise{T}}
@@ -512,58 +389,21 @@ function construct_subproblem(::Nothing, direct_mode::Bool)
 end
 
 """
-    PolicyGraph(
-        builder::Function,
-        graph::Graph{T};
-        sense::Symbol = :Min,
-        lower_bound = -Inf,
-        upper_bound = Inf,
-        optimizer = nothing,
-    ) where {T}
+    PolicyGraph(builder::Function, graph::Graph{T}; kwargs...) where {T}
 
-Construct a policy graph based on the graph structure of `graph`. (See
-[`RVSDDP.Graph`](@ref) for details.)
+Build the policy graph whose subproblems are filled in by `builder`, which is
+called once per node as `builder(subproblem, node_index, discount_factor)`.
 
-## Keyword arguments
-
- - `sense`: whether we are minimizing (`:Min`) or maximizing (`:Max`).
-
- - `lower_bound`: if mimimizing, a valid lower bound for the cost to go in all
-   subproblems.
-
- - `upper_bound`: if maximizing, a valid upper bound for the value to go in all
-   subproblems.
-
- - `optimizer`: the optimizer to use for each of the subproblems
-
-## Examples
-
-```julia
-function builder(subproblem::JuMP.Model, index)
-    # ... subproblem definition ...
-end
-
-model = PolicyGraph(
-    builder,
-    graph;
-    lower_bound = 0.0,
-    optimizer = HiGHS.Optimizer,
-)
-```
-
-Or, using the Julia `do ... end` syntax:
-
-```julia
-model = PolicyGraph(
-    graph;
-    lower_bound = 0.0,
-    optimizer = HiGHS.Optimizer,
-) do subproblem, index
-    # ... subproblem definitions ...
-end
-```
+ - `sense`: `:Min` or `:Max`.
+ - `lower_bound` / `upper_bound`: a finite bound on the cost-to-go, required in
+   the minimizing / maximizing case respectively.
+ - `optimizer`: the optimizer used for every subproblem.
+ - `discount_factor`: the discount β applied to the cost-to-go term.
+ - `max_parallel`: build this many independent copies of each subproblem up
+   front, so that `train(; parallel = max_parallel)` can solve the trajectories
+   of a batch concurrently. `train` builds any it still needs, so this is only
+   a way to pay that cost at construction time. See `_build_replicas!`.
 """
-
 function PolicyGraph(
     builder::Function,
     graph::Graph{T};
@@ -607,22 +447,13 @@ function PolicyGraph(
             continue
         end
         subproblem = construct_subproblem(optimizer, direct_mode)
-        twostage=TwoStage(
-            construct_subproblem(optimizer, direct_mode),
-            Dict{Symbol,VariableRef}(),
-            Dict{Symbol, Vector{VariableRef}}(),
-            VariableRef[],
-            Dict{Symbol, Float64}(),
-            Dict{Symbol, Float64}()
-        )
-
         valuefunction = initialize_value_function(sense, optimizer)
         node = Node(
             node_index,
             subproblem,
-            twostage,
+            Dict{Symbol,Float64}(),
+            Dict{Symbol,Float64}(),
             valuefunction,
-            Dict{Symbol, VariableRef}(),
             JuMP.ConstraintRef[],
             Noise{T}[],
             Noise[],
@@ -698,7 +529,7 @@ function PolicyGraph(
             continue
         end
         node = policy_graph.nodes[node_index]
-        initialize_two_stage(policy_graph, node, optimizer)
+        record_state_bounds!(node)
         add_state_variables_to_value_function(node)
     end
     # Everything `_build_replicas!` needs to rebuild a subproblem from scratch.
@@ -726,9 +557,9 @@ independent JuMP model per worker.
 A replica is built by re-running the user's `builder` on a fresh subproblem, so
 its `parameterize` closure, stage objective and cut constraints all refer to its
 own variables: two workers never touch the same JuMP model. Replicas only ever
-need to be *solved* (`solve_subproblem`), so the expensive per-node extras that
-are read on the master only --- the deterministic-equivalent `two_stage` model
-and the `value_function` models --- are left empty.
+need to be *solved* (`solve_subproblem`), so the per-node extras that are read
+on the master only --- the state bounds and the `value_function` models --- are
+left empty.
 
 Any cut already present on the master is replayed into the new replicas, so this
 is safe to call on a partially trained model.
@@ -771,19 +602,12 @@ function _build_replica(
     replica = Node(
         node.index,
         subproblem,
-        # `two_stage` and `value_function` are master-only: a replica is never
-        # passed to `compute_V` / `compute_TV` / `update_shift`, so building the
-        # (expensive) deterministic equivalent for it would be pure waste.
-        TwoStage(
-            JuMP.Model(),
-            Dict{Symbol,VariableRef}(),
-            Dict{Symbol,Vector{VariableRef}}(),
-            VariableRef[],
-            Dict{Symbol,Float64}(),
-            Dict{Symbol,Float64}(),
-        ),
+        # The state bounds and `value_function` are master-only: a replica is
+        # never passed to `compute_V` / `compute_TV` / `update_shift`, so it has
+        # no use for either.
+        Dict{Symbol,Float64}(),
+        Dict{Symbol,Float64}(),
         initialize_value_function(factory.sense, nothing),
-        Dict{Symbol,VariableRef}(),
         JuMP.ConstraintRef[],
         Noise{T}[],
         Noise[],
@@ -938,28 +762,13 @@ function get_policy_graph(subproblem::JuMP.Model)
 end
 
 """
-    parameterize(
-        modify::Function,
-        subproblem::JuMP.Model,
-        realizations::Vector{T},
-        probability::Vector{Float64} = fill(1.0 / length(realizations))
-    ) where {T}
+    parameterize(modify::Function, subproblem, realizations, probability)
 
-Add a parameterization function `modify` to `subproblem`. The `modify` function
-takes one argument and modifies `subproblem` based on the realization of the
-noise sampled from `realizations` with corresponding probabilities
-`probability`.
-
-In order to conduct an out-of-sample simulation, `modify` should accept
-arguments that are not in realizations (but still of type T).
-
-## Examples
-
-```julia
-RVSDDP.parameterize(subproblem, [1, 2, 3], [0.4, 0.3, 0.3]) do ω
-    JuMP.set_upper_bound(x, ω)
-end
-```
+Declare the stagewise-independent noise of `subproblem`: `modify(ω)` applies the
+realization `ω` to the subproblem, and is called for each of `realizations` with
+the matching entry of `probability` (uniform by default). `modify` must also
+accept realizations outside that list, so that the policy can be simulated
+out-of-sample.
 """
 function parameterize(
     modify::Function,
@@ -982,18 +791,9 @@ function parameterize(
 end
 
 """
-    set_stage_objective(
-        subproblem::JuMP.Model,
-        stage_objective::Union{Real,JuMP.AbstractJuMPScalar},
-    )
+    set_stage_objective(subproblem, stage_objective)
 
-Set the stage-objective of `subproblem` to `stage_objective`.
-
-## Examples
-
-```julia
-RVSDDP.set_stage_objective(subproblem, 2x + 1)
-```
+Set the stage cost of `subproblem`, excluding the cost-to-go term.
 """
 function set_stage_objective(
     subproblem::JuMP.Model,
@@ -1015,13 +815,7 @@ end
 """
     @stageobjective(subproblem, expr)
 
-Set the stage-objective of `subproblem` to `expr`.
-
-## Examples
-
-```julia
-@stageobjective(subproblem, 2x + y)
-```
+Set the stage cost of `subproblem` to `expr`, excluding the cost-to-go term.
 """
 macro stageobjective(subproblem, expr)
     code = MutableArithmetics.rewrite_and_return(expr)

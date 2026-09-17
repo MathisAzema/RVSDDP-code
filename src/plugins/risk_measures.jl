@@ -8,33 +8,8 @@
 """
     Expectation()
 
-The Expectation risk measure.
-
-This risk measure is identical to taking the expectation with respect to the
-nominal distribution.
-
-## Example
-
-```jldoctest
-julia> risk_adjusted_probability = zeros(4);
-
-julia> RVSDDP.adjust_probability(
-           RVSDDP.Expectation(),
-           risk_adjusted_probability,
-           [0.1, 0.2, 0.3, 0.4],  # nominal_probability,
-           RVSDDP.Noise.([1, 2, 3, 4], [0.1, 0.2, 0.3, 0.4]),  # noise_supports,
-           [5.0, 4.0, 6.0, 2.0],  # cost_realizations,
-           true,                  # is_minimization
-       )
-0.0
-
-julia> risk_adjusted_probability
-4-element Vector{Float64}:
- 0.1
- 0.2
- 0.3
- 0.4
-```
+Take the expectation under the nominal distribution. This is the only risk
+measure the paper uses.
 """
 struct Expectation <: AbstractRiskMeasure end
 

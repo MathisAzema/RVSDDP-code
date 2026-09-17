@@ -174,6 +174,35 @@ function prepare_backward_pass(::Node, ::AbstractDualityHandler, ::Any)
     return () -> nothing
 end
 
+# ================================== shifts ================================== #
+
+"""
+    shift_function(
+        model::PolicyGraph{T},
+        node::Node{T},
+        items_traj::Vector{BackwardPassItems{T,Noise}},
+        outgoing_states::Vector{Dict{Symbol,Float64}},
+    )::Tuple{Float64,Int}
+
+The interface for a shift-selection rule, passed as
+`train(; shift_function = ...)`.
+
+Called once per backward step, after the children of `node` have been solved for
+every trajectory of the batch. `items_traj[j]` holds those solutions for
+trajectory `j`, and `outgoing_states[j]` the trial state they were solved at.
+
+Returns the selected shift `Δ` and the cut count at which it takes effect. The
+rule is responsible for applying `Δ` itself, through [`RVSDDP.update_shift`](@ref).
+
+The sequence of shifts it produces must be *nonnegative* (`Δ >= 0`) and
+*nonanticipative* (`Δ` may only depend on information available at that step);
+the convergence analysis rests on those two conditions.
+
+See [`RVSDDP.no_shift`](@ref) and
+[`RVSDDP.shift_update_random_forward`](@ref) for the two rules shipped here.
+"""
+function shift_function end
+
 # ============================= parallel schemes ============================= #
 
 # ============================= forward pass ============================= #

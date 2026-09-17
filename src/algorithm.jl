@@ -597,22 +597,6 @@ mutable struct Trajectory{T}
     cumulative_value::Float64
 end
 
-function _update_delta(
-    node::Node{T}, 
-    incoming_state::Dict{Symbol,Float64}, 
-    risk_adjusted_probability::Vector{Float64}, 
-    objective_realizations::Vector{Float64},
-) where {T}
-    TVᵏ = 0.0
-    for i in 1:length(objective_realizations)
-        p = risk_adjusted_probability[i]
-        TVᵏ += p * objective_realizations[i]
-    end
-    Vᵏ=compute_V(node.value_function, incoming_state)
-    deltaᵏ = TVᵏ - Vᵏ
-    push!(node.delta, deltaᵏ)
-end
-
 function _refine_at_initial_point(
     model::PolicyGraph{T},
     options::Options,

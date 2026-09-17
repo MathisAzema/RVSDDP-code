@@ -12,40 +12,9 @@ end
 """
     ContinuousConicDuality(optimizer = nothing)
 
-Compute dual variables in the backward pass using conic duality, relaxing any
-binary or integer restrictions as necessary.
-
-## Arguments
-
- * `optimizer`: if  specified, RVSDDP.jl will call
-   `JuMP.set_optimizer(subproblem, optimizer)` before solving problems on the
-   backward pass. Use this option only if your default optimizer does not
-   support returning a dual solution after the integrality has been relaxed.
-
-## Example
-
-```jldoctest
-julia> import RVSDDP, Ipopt
-
-julia> handler = RVSDDP.ContinuousConicDuality(Ipopt.Optimizer)
-RVSDDP.ContinuousConicDuality{DataType}(Ipopt.Optimizer)
-```
-
-## Theory
-
-Given the problem
-```
-min Cᵢ(x̄, u, w) + θᵢ
- st (x̄, x′, u) in Xᵢ(w) ∩ S
-    x̄ - x == 0          [λ]
-```
-where `S ⊆ ℝ×ℤ`, we relax integrality and using conic duality to solve for `λ`
-in the problem:
-```
-min Cᵢ(x̄, u, w) + θᵢ
- st (x̄, x′, u) in Xᵢ(w)
-    x̄ - x == 0          [λ]
-```
+Get the duals of the backward pass from conic duality, relaxing any integrality
+first. `optimizer`, if given, is set on the subproblem before those solves; it is
+only needed when the default optimizer cannot return duals after relaxation.
 """
 struct ContinuousConicDuality{O} <: AbstractDualityHandler
     optimizer::O

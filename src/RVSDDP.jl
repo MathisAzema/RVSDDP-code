@@ -34,18 +34,13 @@ include("algorithm.jl")
 include("plugins/risk_measures.jl")
 include("plugins/sampling_schemes.jl")
 include("plugins/bellman_functions.jl")
+include("plugins/shifts.jl")
 include("plugins/stopping_rules.jl")
 include("plugins/duality_handlers.jl")
 include("plugins/backward_sampling_schemes.jl")
 include("plugins/forward_passes.jl")
 
-# Visualization related code.
+# Building, evaluating and replaying the nodes' value functions.
 include("value_functions.jl")
-
-# Scenario-tree scaffolding shared by the two-stage deterministic equivalent.
-include("scenario_tree.jl")
-
-#Mathis
-include("plugins/two_stage.jl")
 
 end
