@@ -173,7 +173,13 @@ function run_toy_infinite(seed_list, parallel, iter_max_list, shift_function_lis
     return 
 end
 
-@everywhere function evaluate_job(folder, iter_limit, N, discount_factor)
+# `active_only` replays only the cuts `run_active_toy` recorded as active at
+# `iter_limit`, which leaves the policy unchanged --- the cuts left out are
+# dominated everywhere on the state box --- while making every subproblem of the
+# simulation that much smaller. It falls back on the full replay, with a
+# warning, when `run_active_toy` has not been run on `folder` for that
+# iteration count.
+@everywhere function evaluate_job(folder, iter_limit, N, discount_factor; active_only = true)
 
     TimeHorizon = Int(ceil(log(0.001)/(log(discount_factor))))
 
@@ -186,7 +192,7 @@ end
         discount_factor=discount_factor,
     )
 
-    RVSDDP._add_cuts_iter(model, iter_limit, folder);
+    RVSDDP._add_cuts_iter(model, iter_limit, folder; active_only = active_only);
 
     Random.seed!(12345)
 
@@ -213,11 +219,11 @@ end
 
 end
 
-function run_evaluate(seed_list, parallel, iter_max_list, shift_function_list, discount_factor_list, iter_list, refine_scheme_list, N_list)
+function run_evaluate(seed_list, parallel, iter_max_list, shift_function_list, discount_factor_list, iter_list, refine_scheme_list, N_list; active_only = true)
     combos = [("results_toy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_iter_$(iter_max)", iter_limit, N, discount_factor) for seed in seed_list for iter_max in iter_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_scheme in refine_scheme_list for iter_limit in iter_list for N in N_list]
 
     results = pmap(combos) do (folder, iter_limit, N, discount_factor)
-        evaluate_job(folder, iter_limit, N, discount_factor)
+        evaluate_job(folder, iter_limit, N, discount_factor; active_only = active_only)
     end
     return 
 end
@@ -225,6 +231,9 @@ end
 @everywhere function active_job_toy(folder, iter_list, discount_factor)
 
     active_cuts_data = []
+    # Which cuts are active, keyed by iteration limit. `active_cuts.csv` keeps
+    # only their number, as before; this is what `evaluate_job` replays from.
+    indices_by_limit = Dict{Int,Dict{Int,Vector{Int}}}()
     for iter_limit in iter_list
         model = RVSDDP.PolicyGraph(
             subproblem_builder,
@@ -237,18 +246,20 @@ end
 
         RVSDDP._add_cuts_iter(model, iter_limit, folder);
 
-        active_cuts = Int.(round.(RVSDDP.count_all_active_cuts(model, 1e-4)))
+        active_cuts = RVSDDP.all_active_cut_indices(model, 1e-4)
+        indices_by_limit[iter_limit] = active_cuts
 
         for t in 1:1
             push!(active_cuts_data, Dict(
                 :time => iter_limit,
                 :stage => t,
-                :num_active_cuts => active_cuts[t],
+                :num_active_cuts => length(active_cuts[t]),
             ))
         end
     end
 
     CSV.write("$(folder)/active_cuts.csv", DataFrame(active_cuts_data))
+    RVSDDP.save_active_cut_indices(folder, indices_by_limit)
 
 end
 

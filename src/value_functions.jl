@@ -155,15 +155,40 @@ function is_active(
     end
 end
 
-function count_active_cuts(node::Node, tol::Float64)
-    active_cuts = 0
-    for (k, cutb) in enumerate(node.value_function.cut_V)
-        interceptb = cutb.intercept
-        coefficientb = cutb.coefficients
-        active_cuts += is_active(node, interceptb - cutb.shift[end][1], coefficientb, tol)
+"""
+    active_cut_indices(node::Node, tol::Float64)
+
+Positions, inside `node.value_function.cut_V`, of the cuts that still attain the
+value function somewhere on the state box (up to `tol`). The others are
+dominated everywhere on that box, so dropping them leaves `V` unchanged.
+
+That position is also the identity under which a cut is recorded on disk:
+`cut_V[k]` is the `k`-th cut the node received, and `_add_cuts` rebuilds a saved
+run in that same order, so `k` picks the same cut out of any replay made under
+the same filter.
+"""
+function active_cut_indices(node::Node, tol::Float64)
+    indices = Int[]
+    for (k, cut) in enumerate(node.value_function.cut_V)
+        if is_active(node, cut.intercept - cut.shift[end][1], cut.coefficients, tol) == 1
+            push!(indices, k)
+        end
     end
-    return active_cuts
+    return indices
 end
+
+"""
+    all_active_cut_indices(model, tol)
+
+`active_cut_indices` for every node, as a `Dict(node index => Vector{Int})`.
+"""
+function all_active_cut_indices(model::PolicyGraph{T}, tol::Float64) where {T}
+    return Dict(
+        index => active_cut_indices(node, tol) for (index, node) in model.nodes
+    )
+end
+
+count_active_cuts(node::Node, tol::Float64) = length(active_cut_indices(node, tol))
 
 function count_all_active_cuts(model::PolicyGraph{T}, tol::Float64) where {T}
     res = [0.0 for (index, node) in model.nodes]
@@ -171,6 +196,81 @@ function count_all_active_cuts(model::PolicyGraph{T}, tol::Float64) where {T}
         res[index] = count_active_cuts(node, tol)
     end
     return res
+end
+
+# ---------------------------------------------------------------------------
+# Recording which cuts are active
+# ---------------------------------------------------------------------------
+
+"""
+    active_cuts_path(folder)
+
+Where the identity of the active cuts of the run saved under `folder` is kept.
+
+One row per active cut: `limit` is the filter value the model was replayed at
+(a wall-clock time for `_add_cuts_time`, an iteration count for
+`_add_cuts_iter`), `node` the node the cut belongs to, and `cut_index` its
+position among that node's cuts.
+"""
+active_cuts_path(folder::String) = joinpath(folder, "active_cut_indices.csv")
+
+"""
+    save_active_cut_indices(folder, indices_by_limit)
+
+Record the active cuts found at each filter value. `indices_by_limit` maps a
+limit to the `Dict(node => Vector{Int})` that `all_active_cut_indices` returns
+for the model replayed at that limit.
+"""
+function save_active_cut_indices(folder::String, indices_by_limit)
+    limits, nodes, cut_indices = Int[], Int[], Int[]
+    for (limit, by_node) in sort(collect(indices_by_limit); by = first)
+        for node_index in sort(collect(keys(by_node)))
+            for k in by_node[node_index]
+                push!(limits, limit)
+                push!(nodes, node_index)
+                push!(cut_indices, k)
+            end
+        end
+    end
+    CSV.write(
+        active_cuts_path(folder),
+        DataFrame(limit = limits, node = nodes, cut_index = cut_indices),
+    )
+    return
+end
+
+"""
+    load_active_cut_indices(folder, limit)
+
+The active cuts recorded for `limit`, as the `Dict(node => Set{Int})` that
+`_add_cuts` takes as its `select`, or `nothing` when `folder` holds no record
+for that limit.
+"""
+function load_active_cut_indices(folder::String, limit)
+    path = active_cuts_path(folder)
+    if !isfile(path)
+        return nothing
+    end
+    df = CSV.read(path, DataFrame)
+    select = Dict{Int,Set{Int}}()
+    for row in eachrow(df)
+        if row.limit == limit
+            push!(get!(select, row.node, Set{Int}()), row.cut_index)
+        end
+    end
+    return isempty(select) ? nothing : select
+end
+
+# The `select` of a replay asked to keep only the active cuts. Missing records
+# are not fatal: the caller falls back on the full replay, which gives the same
+# policy, only with every dominated cut carried along.
+function _active_selection(folder::String, limit)
+    select = load_active_cut_indices(folder, limit)
+    if select === nothing
+        @warn "No active cuts recorded for limit $(limit) in $(folder); " *
+              "replaying every cut. Run the active-cuts job first."
+    end
+    return select
 end
 
 # ---------------------------------------------------------------------------
@@ -211,13 +311,20 @@ happened yet and is dropped.
 `approx_values.csv` and `deltas.csv`; by default that is the largest iteration
 among the kept cuts.
 
-The two `_add_cuts_*` entry points below differ only in that argument.
+`select`, when given, maps a node to the positions --- among *its kept cuts* ---
+of the only cuts to actually attach, as recorded by `save_active_cut_indices`.
+Cuts left out still count towards those positions and towards `limit`, so the
+shift each attached cut is replayed at is the one it would have had in the full
+replay.
+
+The two `_add_cuts_*` entry points below differ only in the first argument.
 """
 function _add_cuts(
     model::PolicyGraph,
     folder::String,
     keep::Function;
     reference_iteration::Union{Int,Nothing} = nothing,
+    select::Union{Nothing,Dict{Int,Set{Int}}} = nothing,
 )
     if !isfile("$(folder)/cuts.csv")
         # Returning here would leave `model` without a single cut, and the
@@ -241,11 +348,24 @@ function _add_cuts(
         limit[node_index] = lim
     end
 
+    # Position of the cut among the kept cuts of its node, i.e. the index it
+    # will have in `cut_V` of a full replay --- the identity `select` uses.
+    rank = Dict(node_index => 0 for node_index in keys(model.nodes))
+
     for cut in cuts
-        if cut.iteration < 1 || !keep(cut)
+        if !keep(cut)
             continue
         end
         node_index = cut.node
+        rank[node_index] += 1
+        # Cut 0 is the lower bound, which a freshly built model already carries.
+        if cut.iteration < 1
+            continue
+        end
+        if select !== nothing &&
+           !(rank[node_index] in get(select, node_index, Set{Int}()))
+            continue
+        end
         node = model[node_index]
         vf = node.value_function
         index = node.index == 1 ? T : node.index - 1
@@ -277,19 +397,37 @@ function _add_cuts(
     return
 end
 
-# Replay the saved run up to a given iteration count.
-function _add_cuts_iter(model::PolicyGraph, iteration::Int64, folder::String)
+# Replay the saved run up to a given iteration count. With `active_only`, only
+# the cuts recorded as active at that same iteration count are attached.
+function _add_cuts_iter(
+    model::PolicyGraph,
+    iteration::Int64,
+    folder::String;
+    active_only::Bool = false,
+)
     return _add_cuts(
         model,
         folder,
         cut -> cut.iteration <= iteration;
         reference_iteration = iteration,
+        select = active_only ? _active_selection(folder, iteration) : nothing,
     )
 end
 
-# Replay the saved run up to a given wall-clock time.
-function _add_cuts_time(model::PolicyGraph, time::Int64, folder::String)
-    return _add_cuts(model, folder, cut -> cut.time <= time)
+# Replay the saved run up to a given wall-clock time. With `active_only`, only
+# the cuts recorded as active at that same time are attached.
+function _add_cuts_time(
+    model::PolicyGraph,
+    time::Int64,
+    folder::String;
+    active_only::Bool = false,
+)
+    return _add_cuts(
+        model,
+        folder,
+        cut -> cut.time <= time;
+        select = active_only ? _active_selection(folder, time) : nothing,
+    )
 end
 
 # Copy the cuts of one in-memory model into another, dropping the shift from the

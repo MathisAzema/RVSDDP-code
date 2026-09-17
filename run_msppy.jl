@@ -10,8 +10,14 @@
 #     include("run_msppy.jl")
 #     run_rvsddp([1, 2, 3], 1, [36000], [RVSDDP.no_shift], [0.995],
 #                [RVSDDP.refine_periodic])
+#     run_active([1, 2, 3], 1, [36000], [RVSDDP.no_shift], [0.995],
+#                [RVSDDP.refine_periodic], [3600, 36000])
 #     run_evaluate([1, 2, 3], 1, [36000], [RVSDDP.no_shift], [0.995],
 #                  [RVSDDP.refine_periodic], [3600, 36000], [5000])
+#
+# `run_active` records which cuts are active, and `run_evaluate` then replays
+# only those, so run it first on the same `time_list`. Pass
+# `active_only = false` to `run_evaluate` to replay every cut instead.
 
 import Pkg
 # Pkg.instantiate()
@@ -255,7 +261,12 @@ function run_rvsddp(seed_list, parallel, time_max_list, shift_function_list, dis
     return 
 end
 
-@everywhere function evaluate_job(folder, time_limit, N, discount_factor)
+# `active_only` replays only the cuts `run_active` recorded as active at
+# `time_limit`, which leaves the policy unchanged --- the cuts left out are
+# dominated everywhere on the state box -- while making every subproblem of the
+# simulation that much smaller. It falls back on the full replay, with a
+# warning, when `run_active` has not been run on `folder` for that time.
+@everywhere function evaluate_job(folder, time_limit, N, discount_factor; active_only = true)
 
     TimeHorizon = PERIOD*Int(ceil(log(0.001)/(PERIOD*log(discount_factor))))
 
@@ -268,7 +279,7 @@ end
         discount_factor=discount_factor,
     )
 
-    RVSDDP._add_cuts_time(model, time_limit, folder);
+    RVSDDP._add_cuts_time(model, time_limit, folder; active_only = active_only);
 
     Random.seed!(12345)
 
@@ -292,11 +303,11 @@ end
 
 end
 
-function run_evaluate(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, refine_scheme_list, time_list, N_list)
+function run_evaluate(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, refine_scheme_list, time_list, N_list; active_only = true)
     combos = [("results_msppy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)", time_limit, N, discount_factor) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_scheme in refine_scheme_list for time_limit in time_list for N in N_list]
 
     pmap(combos) do (folder, time_limit, N, discount_factor)
-        evaluate_job(folder, time_limit, N, discount_factor)
+        evaluate_job(folder, time_limit, N, discount_factor; active_only = active_only)
     end
     return 
 end
@@ -304,6 +315,9 @@ end
 @everywhere function active_job(folder, time_list, discount_factor)
 
     active_cuts_data = []
+    # Which cuts are active, keyed by time limit. `active_cuts.csv` keeps only
+    # their number, as before; this is what `evaluate_job` replays from.
+    indices_by_limit = Dict{Int,Dict{Int,Vector{Int}}}()
     for time_limit in time_list
         model = RVSDDP.PolicyGraph(
             msppy_hydro_thermal_builder,
@@ -316,18 +330,20 @@ end
 
         RVSDDP._add_cuts_time(model, time_limit, folder);
 
-        active_cuts = Int.(round.(RVSDDP.count_all_active_cuts(model, 1e-4)))
+        active_cuts = RVSDDP.all_active_cut_indices(model, 1e-4)
+        indices_by_limit[time_limit] = active_cuts
 
         for t in 1:PERIOD
             push!(active_cuts_data, Dict(
                 :time => time_limit,
                 :stage => t,
-                :num_active_cuts => active_cuts[t],
+                :num_active_cuts => length(active_cuts[t]),
             ))
         end
     end
 
     CSV.write("$(folder)/active_cuts.csv", DataFrame(active_cuts_data))
+    RVSDDP.save_active_cut_indices(folder, indices_by_limit)
 
 end
 
