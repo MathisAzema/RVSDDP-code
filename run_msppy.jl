@@ -5,19 +5,34 @@
 # schema de raffinement (voir `rollout_for`), qui est le seul appariement
 # utilise : il n'y a plus qu'un point d'entree, `run_rvsddp`.
 #
-# Depuis le REPL :
+# Reproduire la section 6.2 (table 1) et l'annexe H (table H1)
+# -------------------------------------------------------------
+# Depuis la racine du depot (la premiere fois seulement :
+# `julia --project=. -e 'import Pkg; Pkg.instantiate()'`), lancer `julia`, puis :
 #
 #     include("run_msppy.jl")
-#     run_rvsddp([1, 2, 3], 1, [36000], [RVSDDP.no_shift], [0.995],
-#                [RVSDDP.refine_periodic])
-#     run_active([1, 2, 3], 1, [36000], [RVSDDP.no_shift], [0.995],
-#                [RVSDDP.refine_periodic], [3600, 36000])
-#     run_evaluate([1, 2, 3], 1, [36000], [RVSDDP.no_shift], [0.995],
-#                  [RVSDDP.refine_periodic], [3600, 36000], [5000])
 #
-# `run_active` records which cuts are active, and `run_evaluate` then replays
-# only those, so run it first on the same `time_list`. Pass
-# `active_only = false` to `run_evaluate` to replay every cut instead.
+#     # 1. Entrainement : un run de 36 000 s par (methode, beta, graine). Les
+#     #    methodes sont des couples (batch, schema) : RV-SDDP et Cyclic SDDP
+#     #    (schema A), leurs variantes _10, puis Periodic RV-SDDP et Periodic
+#     #    SDDP (schema B, annexe H). Les budgets de 600 et 3 600 s des tables
+#     #    sont lus a posteriori dans ce meme run.
+#     run_rvsddp(1:10, [(1, RVSDDP.refine_all), (10, RVSDDP.refine_all), (1, RVSDDP.refine_periodic)], [36000], [RVSDDP.random_shift, RVSDDP.no_shift], [0.8, 0.99, 0.995])
+#
+#     # 2. Coupes actives a 600, 3 600 et 36 000 s : colonne A/T des tables, et
+#     #    coupes que l'etape 3 rejoue. A faire avant l'etape 3.
+#     run_active(1:10, [(1, RVSDDP.refine_all), (10, RVSDDP.refine_all), (1, RVSDDP.refine_periodic)], [36000], [RVSDDP.random_shift, RVSDDP.no_shift], [0.8, 0.99, 0.995], [600, 3600, 36000])
+#
+#     # 3. Evaluation hors echantillon (Protocole 1), avec le N de chaque beta.
+#     run_evaluate(1:10, [(1, RVSDDP.refine_all), (10, RVSDDP.refine_all), (1, RVSDDP.refine_periodic)], [36000], [RVSDDP.random_shift, RVSDDP.no_shift], [0.8, 0.99, 0.995], [600, 3600, 36000], Dict(0.8 => 50000, 0.99 => 10000, 0.995 => 5000))
+#
+#     # 4. Les tables sont ensuite construites par `results msppy.ipynb`.
+#
+# L'etape 1 compte 6 methodes x 3 beta x 10 graines = 180 runs de 10 h, executes
+# `Nbworkers` a la fois (voir plus bas). `ThreadsPerWorker = 1` fait tourner
+# chaque run sur un seul coeur, comme annonce dans l'article.
+# `run_evaluate(...; active_only = false)` rejoue toutes les coupes au lieu des
+# seules coupes actives : la politique est la meme, la simulation plus lente.
 
 import Pkg
 # Pkg.instantiate()
@@ -35,7 +50,6 @@ using Distributed
 # distort the reported times. Leaving it at 1 reproduces the previous
 # behaviour exactly (the batch is then simulated one trajectory at a time).
 ThreadsPerWorker = 1
-# 10 pour les runs a rollout croissant, 5 pour ceux a rollout fixe dans l'article.
 Nbworkers = 10
 # `nworkers()` vaut 1 quand aucun worker ne tourne (le master est compte), ce qui
 # rendait l'arithmetique a trois branches d'avant difficile a lire. On repart
@@ -180,6 +194,16 @@ end
 
 @everywhere using CSV, DataFrames, JSON
 
+# Le dossier ou sont ranges les resultats d'un run.
+@everywhere results_folder(seed, parallel, time_max, shift_function, discount_factor, refine_scheme) =
+    "results_msppy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)"
+
+# Les fonctions `run_*` ci-dessous prennent les methodes sous la forme d'une
+# liste de couples `(parallel, refine_scheme)` : la taille du batch et le schema
+# de raffinement (voir l'en-tete du fichier). Elles croisent ensuite ces couples
+# avec les graines, les budgets, les regles de shift et les beta, et repartissent
+# tous les runs sur les workers en un seul `pmap`.
+
 @everywhere function rvsddp_job(seed, parallel, time_max, shift_function, discount_factor, refine_scheme)
     rollout_limit = rollout_for(refine_scheme)
 
@@ -196,7 +220,7 @@ end
     
     RVSDDP.train(model; refine_scheme=refine_scheme, parallel=parallel, sampling_scheme=RVSDDP.InSampleMonteCarlo(; rollout_limit), time_limit = time_max, infinite = true, shift_function=shift_function); 
 
-    folder3 = "results_msppy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)"
+    folder3 = results_folder(seed, parallel, time_max, shift_function, discount_factor, refine_scheme)
     mkpath(folder3)
 
     RVSDDP.save_cuts(model, folder3)
@@ -230,15 +254,13 @@ end
     CSV.write("$(folder3)/approx_values.csv", DataFrame(approx_value_data))
 end
 
-function run_rvsddp(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, refine_scheme_list)
-    # Les dossiers parents etaient pre-crees ici pour eviter une course entre
-    # workers ; `mkpath` dans le job la tolere desormais.
-    combos = [(seed, parallel, time_max, shift_function, discount_factor, refine_scheme) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_scheme in refine_scheme_list]
+function run_rvsddp(seed_list, methods, time_max_list, shift_function_list, discount_factor_list)
+    combos = [(seed, parallel, time_max, shift_function, discount_factor, refine_scheme) for seed in seed_list for (parallel, refine_scheme) in methods for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list]
 
     pmap(combos) do (seed, parallel, time_max, shift_function, discount_factor, refine_scheme)
         rvsddp_job(seed, parallel, time_max, shift_function, discount_factor, refine_scheme)
     end
-    return 
+    return
 end
 
 # `active_only` replays only the cuts `run_active` recorded as active at
@@ -283,13 +305,14 @@ end
 
 end
 
-function run_evaluate(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, refine_scheme_list, time_list, N_list; active_only = true)
-    combos = [("results_msppy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)", time_limit, N, discount_factor) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_scheme in refine_scheme_list for time_limit in time_list for N in N_list]
+# `N` associe a chaque beta le nombre de scenarios de simulation (Protocole 1).
+function run_evaluate(seed_list, methods, time_max_list, shift_function_list, discount_factor_list, time_list, N::AbstractDict; active_only = true)
+    combos = [(results_folder(seed, parallel, time_max, shift_function, discount_factor, refine_scheme), time_limit, N[discount_factor], discount_factor) for seed in seed_list for (parallel, refine_scheme) in methods for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for time_limit in time_list]
 
     pmap(combos) do (folder, time_limit, N, discount_factor)
         evaluate_job(folder, time_limit, N, discount_factor; active_only = active_only)
     end
-    return 
+    return
 end
 
 @everywhere function active_job(folder, time_list, discount_factor)
@@ -333,13 +356,13 @@ end
 
 end
 
-function run_active(seed_list, parallel, time_max_list, shift_function_list, discount_factor_list, refine_scheme_list, time_list)
-    combos = [("results_msppy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)", time_list, discount_factor) for seed in seed_list for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_scheme in refine_scheme_list]
+function run_active(seed_list, methods, time_max_list, shift_function_list, discount_factor_list, time_list)
+    combos = [(results_folder(seed, parallel, time_max, shift_function, discount_factor, refine_scheme), time_list, discount_factor) for seed in seed_list for (parallel, refine_scheme) in methods for time_max in time_max_list for shift_function in shift_function_list for discount_factor in discount_factor_list]
 
-    pmap(combos) do (folder, iter, discount_factor)
-        active_job(folder, iter, discount_factor)
+    pmap(combos) do (folder, time_list, discount_factor)
+        active_job(folder, time_list, discount_factor)
     end
-    return 
+    return
 end
 
 @everywhere function X_sharp_job(folder, time_limit, N, discount_factor)
@@ -380,8 +403,8 @@ end
 
 end
 
-function run_X_sharp(seed_list, parallel, time_max, shift_function_list, discount_factor_list, refine_scheme_list, N_list)
-    combos = [("results_msppy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)", time_max, N, discount_factor) for seed in seed_list for shift_function in shift_function_list for discount_factor in discount_factor_list for refine_scheme in refine_scheme_list for N in N_list]
+function run_X_sharp(seed_list, methods, time_max, shift_function_list, discount_factor_list, N_list)
+    combos = [(results_folder(seed, parallel, time_max, shift_function, discount_factor, refine_scheme), time_max, N, discount_factor) for seed in seed_list for (parallel, refine_scheme) in methods for shift_function in shift_function_list for discount_factor in discount_factor_list for N in N_list]
 
     pmap(combos) do (folder, time_limit, N, discount_factor)
         X_sharp_job(folder, time_limit, N, discount_factor)

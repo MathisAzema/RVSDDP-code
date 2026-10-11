@@ -1,3 +1,27 @@
+# Experiences sur le probleme jouet de la section 6.1 (figures 3 a 5).
+#
+# Reproduire les resultats de l'article
+# -------------------------------------
+# Depuis la racine du depot (la premiere fois seulement :
+# `julia --project=. -e 'import Pkg; Pkg.instantiate()'`), lancer `julia`, puis :
+#
+#     include("run_toy_infinite.jl")
+#
+#     # 1. Entrainement : 100 iterations, beta = 0.99, L(k) = k, batch de 1,
+#     #    pour RV-SDDP (random_shift) et Cyclic SDDP (no_shift).
+#     run_toy_infinite(1:10, 1, [100], [RVSDDP.random_shift, RVSDDP.no_shift], [0.99], [RVSDDP.refine_all])
+#
+#     # 2. Coupes actives apres chaque iteration : panneau de droite de la
+#     #    figure 5, et coupes que l'etape 3 rejoue. A faire avant l'etape 3.
+#     run_active_toy(1:10, 1, [100], [RVSDDP.random_shift, RVSDDP.no_shift], [0.99], [RVSDDP.refine_all], 1:100)
+#
+#     # 3. Evaluation hors echantillon (Protocole 1, N = 1000) toutes les trois
+#     #    iterations. Attention : ici la liste d'iterations vient AVANT le schema.
+#     run_evaluate(1:10, 1, [100], [RVSDDP.random_shift, RVSDDP.no_shift], [0.99], 1:3:100, [RVSDDP.refine_all], [1000])
+#
+#     # 4. Les figures sont ensuite tracees par `results_toy.ipynb` (la graine 1
+#     #    pour les figures 3 et 4, les dix graines pour la figure 5).
+
 import Pkg
 # Pkg.instantiate()
 Pkg.activate(".")
