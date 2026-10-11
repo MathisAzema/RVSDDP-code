@@ -113,7 +113,7 @@ end
 
 # The same envelope with the shifts undone, i.e. the cheap lower estimate of
 # T(V)(x) that `random_shift` screens candidates with before
-# paying for a real Bellman evaluation (Proposition 10).
+# paying for a real Bellman evaluation (Proposition 8).
 function compute_approx_TV(vf::ValueFunction, incoming_state::Dict{Symbol,Float64})
     return maximum([
         cut.intercept + sum(cut.coefficients[i] * x for (i, x) in incoming_state)
@@ -188,7 +188,17 @@ function all_active_cut_indices(model::PolicyGraph{T}, tol::Float64) where {T}
     )
 end
 
-count_active_cuts(node::Node, tol::Float64) = length(active_cut_indices(node, tol))
+# Position 1 of `cut_V` holds the lower bound ψ0, which is not a cut: it is
+# never counted, neither here nor in the totals the experiments report.
+count_active_cuts(node::Node, tol::Float64) = count(>(1), active_cut_indices(node, tol))
+
+"""
+    count_cuts(node::Node)
+
+The number of cuts of `node`, i.e. the entries of `cut_V` other than the lower
+bound ψ0 it starts with.
+"""
+count_cuts(node::Node) = length(node.value_function.cut_V) - 1
 
 function count_all_active_cuts(model::PolicyGraph{T}, tol::Float64) where {T}
     res = [0.0 for (index, node) in model.nodes]

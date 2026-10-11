@@ -144,7 +144,7 @@ end
 # ---------------------------------------------------------------------------
 
 # Each rule below is followed by the short name its results directory is built
-# from (see `shift_label` in headers.jl). A rule that defines no label falls back
+# from (see `shift_label` in interfaces.jl). A rule that defines no label falls back
 # to its function name.
 shift_label(rule::Function) = string(rule)
 
@@ -220,6 +220,10 @@ function random_shift(
     if residual_bound < shift
         shift = min(shift, compute_TV(node, candidate) - V_candidate)
     end
+    # The residuals are nonnegative in exact arithmetic (V <= T(V)), but solver
+    # tolerances can leave one slightly below zero, and a negative shift would
+    # lift cuts above T(V). Keep the sequence nonnegative, as the analysis needs.
+    shift = max(shift, 0.0)
 
     apply_shift!(model, node, shift)
     return (shift, next_cut_index(node))

@@ -14,7 +14,7 @@
 #  * a cut's shift history is not its own. `apply_shift!` lowers *every* cut of
 #    the node to the same value, so each history is the running minimum of a
 #    single per-node sequence of events, from the cut's creation on
-#    (Proposition 8). Only that sequence needs storing;
+#    (Proposition 6). Only that sequence needs storing;
 #  * the columns are numeric and highly repetitive, which a compressed columnar
 #    format exploits and a text format cannot.
 #

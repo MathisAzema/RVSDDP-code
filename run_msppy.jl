@@ -319,11 +319,13 @@ end
             push!(active_cuts_data, Dict(
                 :time => time_limit,
                 :stage => t,
-                :num_active_cuts => length(active_cuts[t]),
+                # La borne inferieure psi0 (position 1 de `cut_V`) n'est pas une
+                # coupe : elle n'entre dans aucun des deux decomptes.
+                :num_active_cuts => count(>(1), active_cuts[t]),
                 # Nombre total de coupes de l'etape a cet instant. Le releve ici
                 # evite d'avoir a relire tout le fichier de coupes pour le
                 # compter au moment de tracer les resultats.
-                :num_cuts => length(model[t].value_function.cut_V),
+                :num_cuts => RVSDDP.count_cuts(model[t]),
             ))
         end
     end

@@ -157,9 +157,10 @@ function _refine_at_initial_point(
             options.duality_handler,
             options,
         )
-        shift=options.shift_function(model, next_node, [items], [outgoing_state])
-
+        # Record the residual before the shift rule moves the cuts of
+        # `next_node`, so that it is the residual of the current iterate.
         record_bellman_residual!(next_node, outgoing_state, items.probability, items.objectives)
+        shift=options.shift_function(model, next_node, [items], [outgoing_state])
 
         new_cuts = refine_bellman_function(
             model,
@@ -191,6 +192,7 @@ function _refine_at_initial_point(
             options.duality_handler,
             options,
         )
+        record_bellman_residual!(node, incoming_state, items.probability, items.objectives)
         shift=options.shift_function(model, node, [items], [incoming_state])
 
         πᵏ = Dict(key => 0.0 for key in keys(incoming_state))
@@ -215,7 +217,6 @@ function _refine_at_initial_point(
         cut = CandidateCut(iteration, time() - options.start_time, θᵏ, πᵏ, incoming_state)
 
         _update_value_function(node, cut, shift, nothing)
-        record_bellman_residual!(node, incoming_state, items.probability, items.objectives)
         return []
     end
     return new_cuts
@@ -275,12 +276,12 @@ function backward_pass(
         # master model (and, through `_add_cut_constraint_to_model`, every
         # replica), so they have to be added one at a time.
         next_node = model[node.children[1].term]
-        shift=options.shift_function(model, next_node, items_traj, outgoing_states)
+        # Record the residual before the shift rule moves the cuts of
+        # `next_node`, so that it is the residual of the current iterate.
         if level <= last_residual_level
-            outgoing_state = outgoing_states[1]
-            items = items_traj[1]
-            record_bellman_residual!(next_node, outgoing_state, items.probability, items.objectives)
+            record_bellman_residual!(next_node, outgoing_states[1], items_traj[1].probability, items_traj[1].objectives)
         end
+        shift=options.shift_function(model, next_node, items_traj, outgoing_states)
         for (index_traj, traj) in enumerate(trajectory)
             outgoing_state = outgoing_states[index_traj]
             items = items_traj[index_traj]

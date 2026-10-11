@@ -223,8 +223,9 @@ end
             push!(active_cuts_data, Dict(
                 :time => iter_limit,
                 :stage => t,
-                :num_active_cuts => length(active_cuts[t]),
-                :num_cuts => length(model[t].value_function.cut_V),
+                # La borne inferieure psi0 n'est pas une coupe, voir run_msppy.jl.
+                :num_active_cuts => count(>(1), active_cuts[t]),
+                :num_cuts => RVSDDP.count_cuts(model[t]),
             ))
         end
     end
