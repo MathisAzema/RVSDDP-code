@@ -190,6 +190,14 @@ The two choices that make up a method of the computational experiments:
 [`RVSDDP.method_label`](@ref) turns that pair into the name the results are
 stored under.
 
+ - `parallel::Int`: the number of forward trajectories per iteration (the batch
+   size). Each backward step solves the children of the `parallel` trial states
+   concurrently, one task per trajectory. With `random_shift`, the Bellman value
+   at its random state is a further task of the same step when Julia has at
+   least `parallel + 1` threads, so that once the step is joined the shift is a
+   plain minimum; with fewer threads it is computed afterwards, and only when it
+   can lower the shift. The shifts are the same either way. Defaults to `1`.
+
 """
 function train(
     model::PolicyGraph;
@@ -324,8 +332,18 @@ function train(
     # same time. That needs `parallel - 1` extra copies of every subproblem, so
     # that no two of them share a JuMP model; build any that are missing (this
     # is a no-op when the graph was created with `max_parallel >= parallel`).
+    # When there are cores left for them, the candidates of the shift rule are
+    # evaluated during the same parallel step, one more task and one more copy
+    # each (see `_solve_batch`).
+    n_workers = parallel
+    n_candidates = n_shift_candidates(shift_function)
+    if n_candidates > 0 && Threads.nthreads() >= parallel + n_candidates
+        n_workers += n_candidates
+    end
+    if n_workers > 1
+        _build_replicas!(model, n_workers)
+    end
     if parallel > 1
-        _build_replicas!(model, parallel)
         if Threads.nthreads() < parallel
             @warn(
                 "`parallel = $(parallel)` but Julia was started with only " *

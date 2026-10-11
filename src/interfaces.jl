@@ -194,6 +194,7 @@ end
         node::Node{T},
         batch_items::Vector{BackwardPassItems{T,Noise}},
         trial_states::Vector{Dict{Symbol,Float64}},
+        candidates::Vector{ShiftCandidate},
     )::Tuple{Float64,Int}
 
 The interface for a shift-selection rule, passed as
@@ -202,6 +203,11 @@ The interface for a shift-selection rule, passed as
 Called once per backward step, after the children of `node` have been solved for
 every trajectory of the batch. `batch_items[j]` holds those solutions for
 trajectory `j`, and `trial_states[j]` the trial state they were solved at.
+
+`candidates` holds the extra states the rule asked for through
+[`RVSDDP.shift_candidates`](@ref) (and announced through
+[`RVSDDP.n_shift_candidates`](@ref)), with `T(V)` already computed in parallel
+with the batch when a core was free for it; see [`RVSDDP.ShiftCandidate`](@ref).
 
 Returns the selected shift `Δ` and the cut count at which it takes effect. The
 rule is responsible for applying `Δ` itself, through [`RVSDDP.apply_shift!`](@ref).

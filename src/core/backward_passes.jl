@@ -130,6 +130,71 @@ function solve_all_children(
     return
 end
 
+# Internal: whether the shift rule's candidates can be evaluated at the same time
+# as the batch. That takes one more task per candidate, so it is only done when
+# there is a core for every task and a replica of `next_node` for every
+# candidate; otherwise the rule evaluates them itself, sequentially, after the
+# batch (where it can skip those that cannot lower the shift).
+function _concurrent_candidates(next_node::Node, n_trajectories::Int, n_candidates::Int)
+    return n_candidates > 0 &&
+           Threads.nthreads() >= n_trajectories + n_candidates &&
+           length(next_node.replicas) >= n_trajectories + n_candidates - 1
+end
+
+"""
+    _solve_batch(model, node, trial_states, options)
+
+Solve the children of `node` at every trial state of the batch and, when a core
+is free for it, evaluate `T(V)` at the candidates of the shift rule at the same
+time. Returns the `BackwardPassItems` of each trajectory and the
+`ShiftCandidate`s, ready to be handed to the shift rule.
+
+Every task works on its own subproblems: trajectory `j` solves replica `j` of
+each child, and candidate `c` replica `n + c` of `node`'s child, `n` being the
+batch size. Once they are all joined, all that is left for the rule is a
+minimum.
+"""
+function _solve_batch(
+    model::PolicyGraph{T},
+    node::Node{T},
+    trial_states::Vector{Dict{Symbol,Float64}},
+    options::Options,
+) where {T}
+    next_node = model[node.children[1].term]
+    n_trajectories = length(trial_states)
+    # Drawn before the solves, on this task: the solves consume no randomness,
+    # so the random stream is the same as when the rule drew them afterwards.
+    candidates = [
+        ShiftCandidate(state, nothing) for
+        state in shift_candidates(options.shift_function, next_node)
+    ]
+    n_concurrent =
+        _concurrent_candidates(next_node, n_trajectories, length(candidates)) ?
+        length(candidates) : 0
+    items = [BackwardPassItems(T, Noise) for _ in 1:n_trajectories]
+    _parallel_foreach(n_trajectories + n_concurrent) do task
+        if task <= n_trajectories
+            solve_all_children(
+                model,
+                node,
+                items[task],
+                trial_states[task],
+                options.backward_sampling_scheme,
+                options.duality_handler,
+                options;
+                replica = task,
+            )
+        else
+            candidate = candidates[task-n_trajectories]
+            candidate.TV = compute_TV(
+                _node(model, next_node.index, task),
+                candidate.state,
+            )
+        end
+    end
+    return items, candidates
+end
+
 # Internal function: generate the cut at the initial state x0, i.e. refine
 # level 1, which `backward_pass` does whenever the refinement scheme selects it.
 #
@@ -145,22 +210,14 @@ function _refine_at_initial_point(
         node_index = length(model.nodes)
         node =  model[node_index]
         next_node = model[node.children[1].term]
-        items = BackwardPassItems(T, Noise)
         outgoing_state = model.initial_root_state
 
-        solve_all_children(
-            model,
-            node,
-            items,
-            outgoing_state,
-            options.backward_sampling_scheme,
-            options.duality_handler,
-            options,
-        )
+        batch_items, candidates = _solve_batch(model, node, [outgoing_state], options)
+        items = batch_items[1]
         # Record the residual before the shift rule moves the cuts of
         # `next_node`, so that it is the residual of the current iterate.
         record_bellman_residual!(next_node, outgoing_state, items.probability, items.objectives)
-        shift=options.shift_function(model, next_node, [items], [outgoing_state])
+        shift=options.shift_function(model, next_node, batch_items, [outgoing_state], candidates)
 
         new_cuts = refine_bellman_function(
             model,
@@ -193,7 +250,12 @@ function _refine_at_initial_point(
             options,
         )
         record_bellman_residual!(node, incoming_state, items.probability, items.objectives)
-        shift=options.shift_function(model, node, [items], [incoming_state])
+        # Finite horizon: the candidates are evaluated by the rule itself.
+        candidates = [
+            ShiftCandidate(state, nothing) for
+            state in shift_candidates(options.shift_function, node)
+        ]
+        shift=options.shift_function(model, node, [items], [incoming_state], candidates)
 
         πᵏ = Dict(key => 0.0 for key in keys(incoming_state))
         θᵏ = 0.0
@@ -252,24 +314,10 @@ function backward_pass(
         if length(node.children) == 0
             continue
         end
-        items_traj = [BackwardPassItems(T, Noise) for _ in trajectory]
         outgoing_states = [traj.sampled_states[index] for traj in trajectory]
-        # Solve the children for every trajectory of the batch in parallel:
-        # trajectory `j` solves replica `j` of each child and fills its own
-        # `items_traj[j]`, so the tasks share nothing. They are all joined
-        # before the common shift below is computed.
-        _parallel_foreach(length(trajectory)) do index_traj
-            solve_all_children(
-                model,
-                node,
-                items_traj[index_traj],
-                outgoing_states[index_traj],
-                options.backward_sampling_scheme,
-                options.duality_handler,
-                options;
-                replica = index_traj,
-            )
-        end
+        # Solve the children for every trajectory of the batch, and evaluate the
+        # shift rule's candidates, in parallel. See `_solve_batch`.
+        items_traj, candidates = _solve_batch(model, node, outgoing_states, options)
 
         # From here on we are back on a single task: the shift is computed
         # once from the whole batch, and the cuts it produces mutate the
@@ -281,7 +329,7 @@ function backward_pass(
         if level <= last_residual_level
             record_bellman_residual!(next_node, outgoing_states[1], items_traj[1].probability, items_traj[1].objectives)
         end
-        shift=options.shift_function(model, next_node, items_traj, outgoing_states)
+        shift=options.shift_function(model, next_node, items_traj, outgoing_states, candidates)
         for (index_traj, traj) in enumerate(trajectory)
             outgoing_state = outgoing_states[index_traj]
             items = items_traj[index_traj]

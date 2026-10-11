@@ -14,13 +14,19 @@
 #
 # A shift rule is any function
 #
-#     rule(model, node, batch_items, trial_states) -> (Δ, cut_index)
+#     rule(model, node, batch_items, trial_states, candidates) -> (Δ, cut_index)
 #
 # passed to `train(; shift_function = rule)`. It is called once per backward
 # step, after the children of `node` have been solved for every trajectory of
 # the batch, and it is responsible for applying its own shift through
 # `apply_shift!`. The returned `cut_index` is the cut count at which the shift
 # takes effect, and is recorded in the shift history of the cut being created.
+#
+# A rule may also evaluate the Bellman residual at states of its own choosing,
+# its *candidates*, declared through `shift_candidates`. They are drawn before
+# the children are solved so that, when a core is free, `T(V)` at each of them
+# is computed in parallel with the batch (see `_solve_batch`); the rule then
+# receives them as `ShiftCandidate`s and only has to take a minimum.
 #
 # A rule must keep the shift sequence *nonnegative* and *nonanticipative*: Δ >= 0
 # always, and Δ may only depend on information available at that step. Those are
@@ -143,6 +149,41 @@ end
 # The rules
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Candidates
+# ---------------------------------------------------------------------------
+
+"""
+    ShiftCandidate
+
+A state at which a shift rule evaluates the Bellman residual besides the trial
+states of the batch. `TV` holds `T(V)(state)` when it was computed in parallel
+with the batch, and is `nothing` when the rule has to compute it itself.
+"""
+mutable struct ShiftCandidate
+    state::Dict{Symbol,Float64}
+    TV::Union{Nothing,Float64}
+end
+
+"""
+    shift_candidates(rule, node)::Vector{Dict{Symbol,Float64}}
+
+The candidate states `rule` wants the Bellman residual of `node` at, at this
+backward step. Drawn before the children are solved, so that their `T(V)` can be
+computed at the same time; see [`RVSDDP.ShiftCandidate`](@ref). A rule without
+candidates needs no method: the default is none.
+"""
+shift_candidates(rule::Function, node::Node) = Dict{Symbol,Float64}[]
+
+"""
+    n_shift_candidates(rule)::Int
+
+How many candidates `rule` draws per backward step, i.e. how many extra
+subproblem replicas `train` builds so that they can be evaluated in parallel
+with the batch. Must agree with the length of `shift_candidates(rule, node)`.
+"""
+n_shift_candidates(rule::Function) = 0
+
 # Each rule below is followed by the short name its results directory is built
 # from (see `shift_label` in interfaces.jl). A rule that defines no label falls back
 # to its function name.
@@ -150,7 +191,7 @@ shift_label(rule::Function) = string(rule)
 
 #Mathis attention il faudrait un shift pour chaque enfant
 """
-    no_shift(model, node, batch_items, trial_states)
+    no_shift(model, node, batch_items, trial_states, candidates)
 
 The baseline rule: never shift. RV-SDDP then degenerates into the plain cyclic
 SDDP scheme, whose cuts keep their unshifted position and whose value function
@@ -161,6 +202,7 @@ function no_shift(
     node::Node{T},
     batch_items::Vector{BackwardPassItems{T,Noise}},
     trial_states::Vector{Dict{Symbol,Float64}},
+    candidates::Vector{ShiftCandidate},
 ) where {T}
     return (0.0, next_cut_index(node))
 end
@@ -180,26 +222,29 @@ function _random_state_in_box(node::Node)
 end
 
 """
-    random_shift(model, node, batch_items, trial_states)
+    random_shift(model, node, batch_items, trial_states, candidates)
 
 The random-shift rule used in the experiments: the shift is the smallest Bellman
-residual over the trial states of the batch and one extra state drawn uniformly
-at random in the state box.
+residual over the trial states of the batch and one extra state `ζ` drawn
+uniformly at random in the state box, its only candidate.
 
 Keeping the trial states as candidates is what makes a newly generated cut
 active where it was generated; the random state is what makes the rule explore
 the whole state space, which is what the almost-sure convergence argument needs.
 
-The random state is only paid for when it can actually win. Its residual is
-first bounded below using the cut envelope alone (`compute_approx_TV`, no
-solve), and the exact Bellman value (`compute_TV`, one LP per noise) is computed
-only if that bound still beats the best trial-state residual.
+When a core is free, `T(V)(ζ)` has already been computed in parallel with the
+batch, and the shift is a plain minimum. Otherwise the random state is only paid
+for when it can actually win: its residual is first bounded below using the cut
+envelope alone (`compute_approx_TV`, no solve, Proposition 8), and the exact
+Bellman value (`compute_TV`, one LP per noise) is computed only if that bound
+still beats the best trial-state residual. Both ways give the same shift.
 """
 function random_shift(
     model::PolicyGraph{T},
     node::Node{T},
     batch_items::Vector{BackwardPassItems{T,Noise}},
     trial_states::Vector{Dict{Symbol,Float64}},
+    candidates::Vector{ShiftCandidate},
 ) where {T}
     # Candidates 1..n: the trial states the batch has just cut at.
     trial_residuals = zeros(length(batch_items))
@@ -213,12 +258,20 @@ function random_shift(
     end
     shift = minimum(trial_residuals)
 
-    # Candidate n+1: a uniform draw in the state box, screened before solving.
-    candidate = _random_state_in_box(node)
-    V_candidate = compute_V(node.value_function, candidate)
-    residual_bound = compute_approx_TV(node.value_function, candidate) - V_candidate
-    if residual_bound < shift
-        shift = min(shift, compute_TV(node, candidate) - V_candidate)
+    # Candidate n+1: the uniform draw in the state box.
+    for candidate in candidates
+        V_candidate = compute_V(node.value_function, candidate.state)
+        if candidate.TV !== nothing
+            # Already evaluated in parallel with the batch.
+            shift = min(shift, candidate.TV - V_candidate)
+            continue
+        end
+        # Evaluated here, sequentially: screen it before solving.
+        residual_bound =
+            compute_approx_TV(node.value_function, candidate.state) - V_candidate
+        if residual_bound < shift
+            shift = min(shift, compute_TV(node, candidate.state) - V_candidate)
+        end
     end
     # The residuals are nonnegative in exact arithmetic (V <= T(V)), but solver
     # tolerances can leave one slightly below zero, and a negative shift would
@@ -230,3 +283,7 @@ function random_shift(
 end
 
 shift_label(::typeof(random_shift)) = "RVSDDP"
+
+shift_candidates(::typeof(random_shift), node::Node) = [_random_state_in_box(node)]
+
+n_shift_candidates(::typeof(random_shift)) = 1
