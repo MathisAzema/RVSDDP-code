@@ -55,6 +55,8 @@ end
 @everywhere using RVSDDP
 @everywhere using Gurobi
 @everywhere const GRB_ENV = Gurobi.Env()
+
+@everywhere Gurobi.GRBsetintparam(GRB_ENV, "Threads", 1)
 @everywhere optimizer=() -> Gurobi.Optimizer(GRB_ENV)
 
 # Nombre de noeuds du graphe periodique. Sert aussi a borner les

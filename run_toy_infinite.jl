@@ -28,6 +28,8 @@ end
 @everywhere using RVSDDP
 @everywhere using Gurobi
 @everywhere const GRB_ENV = Gurobi.Env()
+
+@everywhere Gurobi.GRBsetintparam(GRB_ENV, "Threads", 1)
 @everywhere optimizer=() -> Gurobi.Optimizer(GRB_ENV)
 
 # Probleme jouet de la section 6.1 de l'article, equation (18). Doit rester
