@@ -130,10 +130,10 @@ function solve_all_children(
     return
 end
 
-# Internal function: generate the cut at the initial state x0, which
-# `backward_pass` does once per iteration whatever the refinement scheme.
+# Internal function: generate the cut at the initial state x0, i.e. refine
+# level 1, which `backward_pass` does whenever the refinement scheme selects it.
 #
-# Unlike the levels of the forward pass, this one is not batched: every
+# Unlike the other levels of the forward pass, this one is not batched: every
 # trajectory of a `parallel > 1` batch starts from the same x0, so solving the
 # children once is enough -- a batch would only produce `parallel` identical
 # cuts. The shift is therefore computed from a batch of one.
@@ -229,81 +229,88 @@ function backward_pass(
     scenario_length = length(trajectory[1].scenario_path)
     period= length(model.nodes)
 
-    index_to_refine = options.refine_scheme(scenario_length, period)
-    # One Bellman residual per phase per iteration. The refinement at x0 below
-    # always records the one for the first phase, so the loop covers the other
-    # `period - 1` phases, i.e. the first `period - 1` refined levels.
-    # (`index_to_refine` is empty when the forward pass is too short to hold a
-    # level, e.g. `refine_all` on a pass of length 1; the loop below then does
-    # nothing and only the refinement at x0 runs.)
-    first_level = isempty(index_to_refine) ? 1 : minimum(index_to_refine)
-    last_residual_level = first_level + period - 2
+    # The levels that receive a cut, numbered as in the paper: level `i` is the
+    # trial state `x^i`, so level 1 is x0 and level `i >= 2` is the state
+    # `sampled_states[i-1]` the forward pass reached after its `(i-1)`-th solve.
+    # See `refinement_schemes.jl`.
+    levels_to_refine = options.refine_scheme(scenario_length, period)
+    # One Bellman residual per phase per iteration: those of the first `period`
+    # refined levels, which cover each phase once.
+    first_level = isempty(levels_to_refine) ? 1 : minimum(levels_to_refine)
+    last_residual_level = first_level + period - 1
     cuts = Dict{T,Vector{Any}}(index => Any[] for index in keys(model.nodes))
-    for index in scenario_length:-1:1
+    for level in scenario_length:-1:2
+        if !(level in levels_to_refine)
+            continue
+        end
+        # The state `x^level` is the outgoing state of the `(level-1)`-th node
+        # of the path, and its cut goes into that node's cost-to-go.
+        index = level - 1
         node_index, _ = trajectory[1].scenario_path[index]
         node =  model[node_index]
         if length(node.children) == 0
             continue
         end
-        if index in index_to_refine
-            items_traj = [BackwardPassItems(T, Noise) for _ in trajectory]
-            outgoing_states = [traj.sampled_states[index] for traj in trajectory]
-            # Solve the children for every trajectory of the batch in parallel:
-            # trajectory `j` solves replica `j` of each child and fills its own
-            # `items_traj[j]`, so the tasks share nothing. They are all joined
-            # before the common shift below is computed.
-            _parallel_foreach(length(trajectory)) do index_traj
-                solve_all_children(
-                    model,
-                    node,
-                    items_traj[index_traj],
-                    outgoing_states[index_traj],
-                    options.backward_sampling_scheme,
-                    options.duality_handler,
-                    options;
-                    replica = index_traj,
-                )
-            end
+        items_traj = [BackwardPassItems(T, Noise) for _ in trajectory]
+        outgoing_states = [traj.sampled_states[index] for traj in trajectory]
+        # Solve the children for every trajectory of the batch in parallel:
+        # trajectory `j` solves replica `j` of each child and fills its own
+        # `items_traj[j]`, so the tasks share nothing. They are all joined
+        # before the common shift below is computed.
+        _parallel_foreach(length(trajectory)) do index_traj
+            solve_all_children(
+                model,
+                node,
+                items_traj[index_traj],
+                outgoing_states[index_traj],
+                options.backward_sampling_scheme,
+                options.duality_handler,
+                options;
+                replica = index_traj,
+            )
+        end
 
-            # From here on we are back on a single task: the shift is computed
-            # once from the whole batch, and the cuts it produces mutate the
-            # master model (and, through `_add_cut_constraint_to_model`, every
-            # replica), so they have to be added one at a time.
-            next_node = model[node.children[1].term]
-            shift=options.shift_function(model, next_node, items_traj, outgoing_states)
-            if index <= last_residual_level
-                outgoing_state = outgoing_states[1]
-                items = items_traj[1]
-                record_bellman_residual!(next_node, outgoing_state, items.probability, items.objectives)
-            end
-            for (index_traj, traj) in enumerate(trajectory)
-                outgoing_state = outgoing_states[index_traj]
-                items = items_traj[index_traj]
-                new_cuts = refine_bellman_function(
-                    model,
-                    node,
-                    node.bellman_function,
-                    options.risk_measure,
-                    outgoing_state,
-                    items.duals,
-                    items.supports,
-                    items.probability,
-                    items.objectives,
-                    shift,
-                    length(options.log)+1,
-                    time()-options.start_time,
-                )
+        # From here on we are back on a single task: the shift is computed
+        # once from the whole batch, and the cuts it produces mutate the
+        # master model (and, through `_add_cut_constraint_to_model`, every
+        # replica), so they have to be added one at a time.
+        next_node = model[node.children[1].term]
+        shift=options.shift_function(model, next_node, items_traj, outgoing_states)
+        if level <= last_residual_level
+            outgoing_state = outgoing_states[1]
+            items = items_traj[1]
+            record_bellman_residual!(next_node, outgoing_state, items.probability, items.objectives)
+        end
+        for (index_traj, traj) in enumerate(trajectory)
+            outgoing_state = outgoing_states[index_traj]
+            items = items_traj[index_traj]
+            new_cuts = refine_bellman_function(
+                model,
+                node,
+                node.bellman_function,
+                options.risk_measure,
+                outgoing_state,
+                items.duals,
+                items.supports,
+                items.probability,
+                items.objectives,
+                shift,
+                length(options.log)+1,
+                time()-options.start_time,
+            )
 
-                push!(cuts[node_index], new_cuts)
-            end
+            push!(cuts[node_index], new_cuts)
         end
     end
-    # The cut at the initial state is generated at every iteration, whatever the
-    # refinement scheme: it is what puts x0 in the stable set, which the
-    # convergence analysis needs. It is deliberately not batched, see
+    # Level 1, the initial state, comes last, as in the backward pass of
+    # Algorithm 1. `refine_all` refines it at every iteration, which is what puts
+    # x0 in the stable set of the convergence analysis; `refine_periodic` only
+    # when it draws the first block. It is deliberately not batched, see
     # `_refine_at_initial_point`.
-    new_cuts_0 = _refine_at_initial_point(model, options)
-    push!(cuts[length(model.nodes)], new_cuts_0)
+    if 1 in levels_to_refine
+        new_cuts_0 = _refine_at_initial_point(model, options)
+        push!(cuts[length(model.nodes)], new_cuts_0)
+    end
     push!(model.approx_value, (time()-options.start_time, compute_approx_value(model)))
     return cuts
 end

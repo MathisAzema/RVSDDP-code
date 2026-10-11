@@ -61,7 +61,7 @@ end
 # trajectoires et a decouper les resultats par etape.
 @everywhere const PERIOD = 12
 @everywhere growing_rollout(i::Int) = PERIOD * i
-@everywhere fixed_rollout(i::Int) = 10 * PERIOD - 1    # 10 periodes, constante
+@everywhere fixed_rollout(i::Int) = 10 * PERIOD        # 10 periodes, constante
 
 # La politique de rollout decoule du schema de raffinement : c'est le seul
 # appariement utilise, et le lier ici garantit que le dossier de resultats -- que

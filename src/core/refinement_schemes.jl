@@ -7,9 +7,11 @@
 # back. This is the "Fw/Bw scheme" axis of the computational experiments, the
 # second choice a method is made of, alongside the shift rule of `shifts.jl`.
 #
-# A scheme only chooses among the states the forward pass actually visited,
-# levels `1` to `scenario_length`. The cut at the initial state x0 is not one of
-# them: `backward_pass` generates it at every iteration regardless of the scheme.
+# Levels follow the numbering of the paper: a forward pass of length `L` solves
+# `L` subproblems and visits the trial states `x^1 = x0, x^2, ..., x^{L+1}`, and
+# level `i` is the state `x^i`. As in Algorithm 1, only levels `1` to `L` can
+# receive a cut: the last state `x^{L+1}` never does. Level `1` is the initial
+# state, which `backward_pass` refines last, through `_refine_at_initial_point`.
 
 # Each scheme below is followed by the short name its results directory is built
 # from (see `refine_label` in interfaces.jl). A scheme that defines no label
@@ -19,33 +21,38 @@ refine_label(scheme::Function) = string(scheme)
 """
     refine_all(scenario_length::Int, period::Int)
 
-Refine at every state visited by the forward pass, which is scheme `A` of the
-computational experiments: with the cut at x0 that `backward_pass` always adds,
-a forward pass of length `L(k)` yields `L(k)` cuts.
+Refine at every level `x^1 = x0, ..., x^L` of the forward pass, which is scheme
+`A` of the computational experiments: a forward pass of length `L(k)` yields
+`L(k)` cuts, and with `L(k) = T k` every phase receives exactly `k` of them.
 
-This is the scheme the convergence analysis covers, provided `L(k) → ∞`.
+This is the scheme the convergence analysis covers, provided `L(k) → ∞`. It
+refines at `x0` at every iteration, which is what puts `x0` in the stable set.
 """
-refine_all(scenario_length::Int, period::Int) = 1:(scenario_length-1)
+refine_all(scenario_length::Int, period::Int) = 1:scenario_length
 
 refine_label(::typeof(refine_all)) = ""
 
 """
     refine_periodic(scenario_length::Int, period::Int)
 
-Refine one block of `period` consecutive visited states, drawn uniformly among
-the blocks the forward pass contains. This is scheme `B`, following the periodic
-approach of Shapiro and Ding: whatever the length of the forward pass, an
-iteration produces `period` cuts from the block, one per phase, plus the cut at
-x0 that `backward_pass` always adds.
+Refine one block of `period` consecutive levels, drawn uniformly among the
+blocks `(b-1) period + 1 : b period` the forward pass contains. This is scheme
+`B`, following the periodic approach of Shapiro and Ding: whatever the length of
+the forward pass, an iteration produces exactly `period` cuts, one per phase.
+The initial state `x0` is refined only when the first block is drawn.
 
 If the forward pass is shorter than one period it holds no complete block, and
-every visited state is refined.
+every level is refined.
 
 Note that a fixed forward-pass length does not meet the `L(k) → ∞` condition of
 the convergence theorem, so this scheme is an empirical baseline.
 """
 function refine_periodic(scenario_length::Int, period::Int)
-    block = rand(1:max(1, div(scenario_length, period)))
+    n_blocks = div(scenario_length, period)
+    if n_blocks == 0
+        return 1:scenario_length
+    end
+    block = rand(1:n_blocks)
     return ((block-1)*period+1):(block*period)
 end
 
