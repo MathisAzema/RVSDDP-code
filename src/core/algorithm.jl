@@ -13,6 +13,123 @@ mutable struct Trajectory{T}
     cumulative_value::Float64
 end
 
+"""
+    ParallelTiming
+
+One task of a parallel step of training, as recorded in
+[`RVSDDP.parallel_timings`](@ref).
+
+ - `iteration`: the training iteration.
+ - `step`: `"forward"` for the forward pass, `"backward"` for a backward step.
+ - `level`: for a backward step, the level refined (`1` is x0, see
+   `refinement_schemes.jl`); `0` for the forward pass.
+ - `task`: the task within the step; trajectory `j` is task `j`.
+ - `kind`: `"trajectory"`, or `"candidate"` for the evaluation of `T(V)` at a
+   candidate of the shift rule (see `_solve_batch`).
+ - `thread`: the thread the task finished on.
+ - `wait_start`, `busy`, `wait_end`: in seconds, how long the task waited to
+   start, ran, and then waited for the slowest task of the step before the
+   algorithm could move on. `wait_end` is the idle time of its core.
+"""
+struct ParallelTiming
+    iteration::Int
+    step::String
+    level::Int
+    task::Int
+    kind::String
+    thread::Int
+    wait_start::Float64
+    busy::Float64
+    wait_end::Float64
+end
+
+"""
+    parallel_timings(model::PolicyGraph)::Vector{ParallelTiming}
+
+The timings of every task of every parallel step of the last call to `train`,
+in the order they ran. Only steps whose tasks actually ran side by side are
+recorded: with a single thread, or a single task, no core ever waits.
+"""
+parallel_timings(model::PolicyGraph) =
+    get!(() -> ParallelTiming[], model.ext, :parallel_timings)::Vector{ParallelTiming}
+
+# Internal: append the timings `_parallel_foreach_timed` returned for one
+# parallel step. Tasks beyond the `n_trajectories` first are shift candidates.
+function _record_parallel_timings!(
+    model::PolicyGraph,
+    options,
+    step::String,
+    level::Int,
+    timings,
+    n_trajectories::Int,
+)
+    if length(timings) <= 1 || Threads.nthreads() == 1
+        return
+    end
+    iteration = length(options.log) + 1
+    log = parallel_timings(model)
+    for (task, t) in enumerate(timings)
+        push!(
+            log,
+            ParallelTiming(
+                iteration,
+                step,
+                level,
+                task,
+                task <= n_trajectories ? "trajectory" : "candidate",
+                t.thread,
+                t.wait_start,
+                t.busy,
+                t.wait_end,
+            ),
+        )
+    end
+    return
+end
+
+"""
+    save_parallel_timings(model::PolicyGraph, folder::String)
+
+Write a summary of [`RVSDDP.parallel_timings`](@ref) to
+`folder/parallel_timings.csv`: one row per kind of task --- `forward`,
+`backward_trajectory` and `backward_candidate`, the latter only when the shift
+rule had candidates evaluated in parallel --- with the number of tasks
+(`tasks`), and the computing time (`busy_s`) and end-of-step waiting time
+(`wait_end_s`) summed over all of them, in seconds.
+
+These are totals over every core: with several cores working at once, they add
+up to more than the wall-clock time of the run. The file only holds the header
+when no step ran in parallel.
+"""
+function save_parallel_timings(model::PolicyGraph, folder::String)
+    mkpath(folder)
+    rows = [
+        ("forward", t -> t.step == "forward"),
+        ("backward_trajectory", t -> t.step == "backward" && t.kind == "trajectory"),
+        ("backward_candidate", t -> t.step == "backward" && t.kind == "candidate"),
+    ]
+    log = parallel_timings(model)
+    df = DataFrames.DataFrame(
+        step = String[],
+        tasks = Int[],
+        busy_s = Float64[],
+        wait_end_s = Float64[],
+    )
+    for (step, keep) in rows
+        tasks = filter(keep, log)
+        if !isempty(tasks)
+            push!(df, (
+                step,
+                length(tasks),
+                sum(t.busy for t in tasks),
+                sum(t.wait_end for t in tasks),
+            ))
+        end
+    end
+    CSV.write(joinpath(folder, "parallel_timings.csv"), df)
+    return
+end
+
 struct IterationResult
     pid::Int
     bound::Float64
@@ -197,6 +314,8 @@ stored under.
    least `parallel + 1` threads, so that once the step is joined the shift is a
    plain minimum; with fewer threads it is computed afterwards, and only when it
    can lower the shift. The shifts are the same either way. Defaults to `1`.
+   How long each core waits at the end of every parallel step is recorded in
+   [`RVSDDP.parallel_timings`](@ref).
 
 """
 function train(
@@ -374,6 +493,8 @@ function train(
         parallel,
         refine_scheme,
     )
+    # The timings of the parallel steps describe this run only.
+    model.ext[:parallel_timings] = ParallelTiming[]
     status = :not_solved
     try
         status = _training_loop(model, options)

@@ -39,10 +39,11 @@ function forward_pass(
         end
     end
     forward_trajectory = Vector{Trajectory{T}}(undef, options.parallel)
-    _parallel_foreach(options.parallel) do i
+    timings = _parallel_foreach_timed(options.parallel) do i
         forward_trajectory[i] =
             _forward_trajectory(model, options, scenarios[i], i)
     end
+    _record_parallel_timings!(model, options, "forward", 0, timings, options.parallel)
     return forward_trajectory
 end
 

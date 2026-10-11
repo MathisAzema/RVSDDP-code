@@ -88,8 +88,8 @@ end
     folder3 = "results_toy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_iter_$(iter_max)"
     mkpath(folder3)
 
-    # Voir run_msppy.jl : cuts.arrow + shift_events.arrow.
-    RVSDDP.save_cuts(model, folder3)
+    RVSDDP.save_cuts(model, folder3)=
+    RVSDDP.save_parallel_timings(model, folder3)
 
     delta_data = []
     for (_, node) in model.nodes

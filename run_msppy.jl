@@ -199,10 +199,8 @@ end
     folder3 = "results_msppy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)"
     mkpath(folder3)
 
-    # Ecrit cuts.arrow et shift_events.arrow. Environ sept fois plus compact que
-    # l'ancien cuts.csv, dont les coupes reprenaient le nom des variables d'etat
-    # a chaque ligne et recopiaient l'historique des shifts par coupe.
     RVSDDP.save_cuts(model, folder3)
+    RVSDDP.save_parallel_timings(model, folder3)
 
     delta_data = []
     for (_, node) in model.nodes

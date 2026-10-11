@@ -142,12 +142,14 @@ function _concurrent_candidates(next_node::Node, n_trajectories::Int, n_candidat
 end
 
 """
-    _solve_batch(model, node, trial_states, options)
+    _solve_batch(model, node, trial_states, level, options)
 
 Solve the children of `node` at every trial state of the batch and, when a core
 is free for it, evaluate `T(V)` at the candidates of the shift rule at the same
 time. Returns the `BackwardPassItems` of each trajectory and the
-`ShiftCandidate`s, ready to be handed to the shift rule.
+`ShiftCandidate`s, ready to be handed to the shift rule. `level` is the level
+being refined, under which the timings of the step are recorded (see
+[`RVSDDP.parallel_timings`](@ref)).
 
 Every task works on its own subproblems: trajectory `j` solves replica `j` of
 each child, and candidate `c` replica `n + c` of `node`'s child, `n` being the
@@ -158,6 +160,7 @@ function _solve_batch(
     model::PolicyGraph{T},
     node::Node{T},
     trial_states::Vector{Dict{Symbol,Float64}},
+    level::Int,
     options::Options,
 ) where {T}
     next_node = model[node.children[1].term]
@@ -172,7 +175,7 @@ function _solve_batch(
         _concurrent_candidates(next_node, n_trajectories, length(candidates)) ?
         length(candidates) : 0
     items = [BackwardPassItems(T, Noise) for _ in 1:n_trajectories]
-    _parallel_foreach(n_trajectories + n_concurrent) do task
+    timings = _parallel_foreach_timed(n_trajectories + n_concurrent) do task
         if task <= n_trajectories
             solve_all_children(
                 model,
@@ -192,6 +195,7 @@ function _solve_batch(
             )
         end
     end
+    _record_parallel_timings!(model, options, "backward", level, timings, n_trajectories)
     return items, candidates
 end
 
@@ -212,7 +216,7 @@ function _refine_at_initial_point(
         next_node = model[node.children[1].term]
         outgoing_state = model.initial_root_state
 
-        batch_items, candidates = _solve_batch(model, node, [outgoing_state], options)
+        batch_items, candidates = _solve_batch(model, node, [outgoing_state], 1, options)
         items = batch_items[1]
         # Record the residual before the shift rule moves the cuts of
         # `next_node`, so that it is the residual of the current iterate.
@@ -317,7 +321,7 @@ function backward_pass(
         outgoing_states = [traj.sampled_states[index] for traj in trajectory]
         # Solve the children for every trajectory of the batch, and evaluate the
         # shift rule's candidates, in parallel. See `_solve_batch`.
-        items_traj, candidates = _solve_batch(model, node, outgoing_states, options)
+        items_traj, candidates = _solve_batch(model, node, outgoing_states, level, options)
 
         # From here on we are back on a single task: the shift is computed
         # once from the whole batch, and the cuts it produces mutate the

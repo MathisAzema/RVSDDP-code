@@ -57,3 +57,37 @@ function _parallel_foreach(f::Function, n::Int)
     end
     return
 end
+
+"""
+    _parallel_foreach_timed(f::Function, n::Int)
+
+`_parallel_foreach(f, n)`, timing every task. Returns one named tuple per task:
+the thread it finished on, and three durations in seconds measured from the
+start of the step to the moment the last task is joined --- how long the task
+waited before starting (`wait_start`, nonzero only when there are fewer threads
+than tasks), how long it ran (`busy`), and how long it then waited for the
+slowest task of the step (`wait_end`), i.e. the time its core sat idle before
+the algorithm could move on.
+"""
+function _parallel_foreach_timed(f::Function, n::Int)
+    starts = zeros(Int64, n)
+    stops = zeros(Int64, n)
+    threads = zeros(Int, n)
+    t0 = Int64(time_ns())
+    _parallel_foreach(n) do i
+        starts[i] = Int64(time_ns())
+        f(i)
+        stops[i] = Int64(time_ns())
+        threads[i] = Threads.threadid()
+        return
+    end
+    t1 = Int64(time_ns())
+    return [
+        (
+            thread = threads[i],
+            wait_start = (starts[i] - t0) / 1e9,
+            busy = (stops[i] - starts[i]) / 1e9,
+            wait_end = (t1 - stops[i]) / 1e9,
+        ) for i in 1:n
+    ]
+end
