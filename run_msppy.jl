@@ -194,6 +194,21 @@ end
 
 @everywhere using CSV, DataFrames, JSON
 
+# Rend au systeme la memoire du job qui vient de se terminer sur ce worker. Ses
+# modeles ne sont liberes (finaliseurs Gurobi compris) qu'au passage du
+# ramasse-miettes, qu'un worker inactif ne declenche jamais : sans cet appel, la
+# memoire d'un run de 10 h resterait occupee tant que le worker vit, par exemple
+# pendant qu'il attend la fin des autres. `malloc_trim` rend ensuite au systeme
+# ce que glibc garde de cote. Le socle du worker (Julia, paquets, code compile,
+# ~0,9 Go) reste, lui, jusqu'a la fin de la session. A appeler une fois le job
+# revenu, pas dans le job : ses variables locales le garderaient en vie.
+@everywhere function release_memory()
+    GC.gc(true)
+    GC.gc(true)   # le second passage recupere ce que les finaliseurs ont libere
+    Sys.islinux() && ccall(:malloc_trim, Cint, (Cint,), 0)
+    return
+end
+
 # Le dossier ou sont ranges les resultats d'un run.
 @everywhere results_folder(seed, parallel, time_max, shift_function, discount_factor, refine_scheme) =
     "results_msppy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)"
@@ -259,6 +274,7 @@ function run_rvsddp(seed_list, methods, time_max_list, shift_function_list, disc
 
     pmap(combos) do (seed, parallel, time_max, shift_function, discount_factor, refine_scheme)
         rvsddp_job(seed, parallel, time_max, shift_function, discount_factor, refine_scheme)
+        release_memory()
     end
     return
 end
@@ -311,6 +327,7 @@ function run_evaluate(seed_list, methods, time_max_list, shift_function_list, di
 
     pmap(combos) do (folder, time_limit, N, discount_factor)
         evaluate_job(folder, time_limit, N, discount_factor; active_only = active_only)
+        release_memory()
     end
     return
 end
@@ -361,6 +378,7 @@ function run_active(seed_list, methods, time_max_list, shift_function_list, disc
 
     pmap(combos) do (folder, time_list, discount_factor)
         active_job(folder, time_list, discount_factor)
+        release_memory()
     end
     return
 end
@@ -408,6 +426,7 @@ function run_X_sharp(seed_list, methods, time_max, shift_function_list, discount
 
     pmap(combos) do (folder, time_limit, N, discount_factor)
         X_sharp_job(folder, time_limit, N, discount_factor)
+        release_memory()
     end
     return
 end

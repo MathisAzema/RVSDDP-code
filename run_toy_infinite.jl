@@ -96,6 +96,21 @@ end
 
 @everywhere using CSV, DataFrames, JSON
 
+# Rend au systeme la memoire du job qui vient de se terminer sur ce worker. Ses
+# modeles ne sont liberes (finaliseurs Gurobi compris) qu'au passage du
+# ramasse-miettes, qu'un worker inactif ne declenche jamais : sans cet appel, la
+# memoire d'un run de 10 h resterait occupee tant que le worker vit, par exemple
+# pendant qu'il attend la fin des autres. `malloc_trim` rend ensuite au systeme
+# ce que glibc garde de cote. Le socle du worker (Julia, paquets, code compile,
+# ~0,9 Go) reste, lui, jusqu'a la fin de la session. A appeler une fois le job
+# revenu, pas dans le job : ses variables locales le garderaient en vie.
+@everywhere function release_memory()
+    GC.gc(true)
+    GC.gc(true)   # le second passage recupere ce que les finaliseurs ont libere
+    Sys.islinux() && ccall(:malloc_trim, Cint, (Cint,), 0)
+    return
+end
+
 @everywhere function rvsddp_job(seed, parallel, iter_max, shift_function, discount_factor, refine_scheme)
     model = RVSDDP.PolicyGraph(
         subproblem_builder,
@@ -163,6 +178,7 @@ function run_toy_infinite(seed_list, parallel, iter_max_list, shift_function_lis
 
     results = pmap(combos) do (seed, parallel, iter_max, shift_function, discount_factor, refine_scheme)
         rvsddp_job(seed, parallel, iter_max, shift_function, discount_factor, refine_scheme)
+        release_memory()
     end
     return 
 end
@@ -218,6 +234,7 @@ function run_evaluate(seed_list, parallel, iter_max_list, shift_function_list, d
 
     results = pmap(combos) do (folder, iter_limit, N, discount_factor)
         evaluate_job(folder, iter_limit, N, discount_factor; active_only = active_only)
+        release_memory()
     end
     return 
 end
@@ -264,6 +281,7 @@ function run_active_toy(seed_list, parallel, iter_max_list, shift_function_list,
 
     results = pmap(combos) do (folder, iter, discount_factor)
         active_job_toy(folder, iter, discount_factor)
+        release_memory()
     end
     return 
 end
