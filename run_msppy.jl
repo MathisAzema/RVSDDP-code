@@ -60,11 +60,7 @@ end
 # Nombre de noeuds du graphe periodique. Sert aussi a borner les
 # trajectoires et a decouper les resultats par etape.
 @everywhere const PERIOD = 12
-
-# Les deux politiques de profondeur de trajectoire utilisees dans l'article.
-# Fonctions nommees plutot que lambdas : `pmap` les transmet alors aux workers
-# par leur nom, sans avoir a serialiser une fermeture anonyme.
-@everywhere growing_rollout(i::Int) = PERIOD * i - 1   # croit avec l'iteration
+@everywhere growing_rollout(i::Int) = PERIOD * i
 @everywhere fixed_rollout(i::Int) = 10 * PERIOD - 1    # 10 periodes, constante
 
 # La politique de rollout decoule du schema de raffinement : c'est le seul
