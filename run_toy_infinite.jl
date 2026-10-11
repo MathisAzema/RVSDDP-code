@@ -30,41 +30,39 @@ end
 @everywhere const GRB_ENV = Gurobi.Env()
 @everywhere optimizer=() -> Gurobi.Optimizer(GRB_ENV)
 
+# Probleme jouet de la section 6.1 de l'article, equation (18). Doit rester
+# identique au `subproblem_builder` de notebook_toy.ipynb et results_toy.ipynb,
+# qui rejouent les coupes ecrites ici.
 @everywhere function subproblem_builder(subproblem::Model, node::Int, discount_factor::Float64)
     # State variables
-    N=1
-    @variable(subproblem, 0 <= volume[1:N] <= 200, RVSDDP.State, initial_value = 50)
+    @variable(subproblem, 0 <= volume <= 200, RVSDDP.State, initial_value = 50)
     # Control variables
     @variables(subproblem, begin
-        thermal_generation[1:4] >= 0
-        thermal_generation_tot >= 0
-        hydro_generation[1:N] >= 0
-        hydro_spill[1:N] >= 0
+        thermal_generation >= 0
+        hydro_generation >= 0
+        hydro_spill >= 0
         deficit >= 0
     end)
     # Random variables
     @variable(subproblem, inflow)
-    Ω = [20.0, 80.0]
+    Ω = [20.0, 90.0]
     P = [1 / length(Ω) for _ in Ω]
     RVSDDP.parameterize(subproblem, Ω, P) do ω
         return JuMP.fix(inflow, ω)
     end
 
-    capa_th = [10 15 10 5] 
-    c_th = [1 2 5 10]
     # Transition function and constraints
     @constraints(
         subproblem,
         begin
-            [i in 1:N], volume[i].out == volume[i].in - hydro_generation[i] - hydro_spill[i] + inflow
-            [i in 1:N], hydro_generation[i] <= 100
-            [i in 1:1], thermal_generation[i] <= capa_th[i]
-            thermal_generation_tot==sum(thermal_generation[i] for i in 1:4)
-            deficit + sum(hydro_generation[i] for i in 1:N) + thermal_generation_tot == 60
+            volume.out == volume.in - hydro_generation - hydro_spill + inflow
+            hydro_generation <= 100
+            thermal_generation <= 30
+            deficit + hydro_generation + thermal_generation == 60
         end
     )
     # Stage-objective
-    @stageobjective(subproblem, 1*(50*sum(hydro_spill[i] for i in 1:N) + 50 * deficit+ sum(thermal_generation[i]*c_th[i] for i in 1:4)))
+    @stageobjective(subproblem, 50*hydro_spill + 50 * deficit+ 2*thermal_generation)
     return subproblem
 end
 
