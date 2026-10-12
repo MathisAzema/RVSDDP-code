@@ -51,6 +51,8 @@ using Distributed
 # behaviour exactly (the batch is then simulated one trajectory at a time).
 ThreadsPerWorker = 1
 Nbworkers = 10
+# ThreadsPerWorker = 11
+# Nbworkers = 1
 # `nworkers()` vaut 1 quand aucun worker ne tourne (le master est compte), ce qui
 # rendait l'arithmetique a trois branches d'avant difficile a lire. On repart
 # d'une table rase : `nprocs() > 1` est vrai seulement s'il y a de vrais workers.
@@ -209,15 +211,11 @@ end
     return
 end
 
-# Le dossier ou sont ranges les resultats d'un run.
-@everywhere results_folder(seed, parallel, time_max, shift_function, discount_factor, refine_scheme) =
-    "results_msppy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)/$(discount_factor)/seed_$(seed)_time_$(time_max)"
-
-# Les fonctions `run_*` ci-dessous prennent les methodes sous la forme d'une
-# liste de couples `(parallel, refine_scheme)` : la taille du batch et le schema
-# de raffinement (voir l'en-tete du fichier). Elles croisent ensuite ces couples
-# avec les graines, les budgets, les regles de shift et les beta, et repartissent
-# tous les runs sur les workers en un seul `pmap`.
+@everywhere THREADS_PER_WORKER = $ThreadsPerWorker
+@everywhere function results_folder(seed, parallel, time_max, shift_function, discount_factor, refine_scheme)
+    threads = THREADS_PER_WORKER > 1 ? "_threads_$(THREADS_PER_WORKER)" : ""
+    return "results_msppy/$(RVSDDP.method_label(shift_function, refine_scheme))_parallel_$(parallel)$(threads)/$(discount_factor)/seed_$(seed)_time_$(time_max)"
+end
 
 @everywhere function rvsddp_job(seed, parallel, time_max, shift_function, discount_factor, refine_scheme)
     rollout_limit = rollout_for(refine_scheme)
